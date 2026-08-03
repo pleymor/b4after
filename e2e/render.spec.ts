@@ -215,3 +215,43 @@ test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", asyn
   // Facteur 2048/4000 = 0.512 : cellule de 1536 x 2048.
   expect(size).toEqual({ width: 1536 * 2 + 8, height: 2048 })
 })
+
+test('renderSideBySide réduit aussi la translation stockée', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+
+    // Seul chemin qu emprunteront de vraies photos : facteur < 1 et transformation
+    // non triviale. Cadre 3000x4000, donc facteur 2048/4000 = 0.512 et cellule
+    // 1536x2048 ; à l échelle 2 la photo réduite fait 3072 px de large.
+    const frame = { width: 3000, height: 4000 }
+    const bitmap = window.__stripes(3000, 4000)
+    const input = (tx) => ({
+      source: bitmap,
+      transform: { scale: 2, rotation: 0, tx, ty: 0 },
+      takenAt: 0,
+      shot: frame,
+    })
+
+    // tx = ±1000 et non ±1500 : à 1500 la translation sature le jeu disponible, la
+    // frontière rouge/bleu sort de la cellule dans les deux cas et le test ne
+    // discriminerait plus rien.
+    const blob = await renderSideBySide(input(1000), input(-1000), frame, { showDates: false })
+    const decoded = await createImageBitmap(blob)
+    const canvas = new OffscreenCanvas(decoded.width, decoded.height)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(decoded, 0, 0)
+
+    return {
+      // Échantillons pris du bon côté de la frontière attendue : réduite, elle
+      // tombe à x = 1280 dans la première cellule et à x = 256 dans la seconde.
+      before: window.__pixel(ctx, 1400, 1024),
+      after: window.__pixel(ctx, 1536 + 8 + 136, 1024),
+    }
+  }, HELPERS)
+
+  // Sans la réduction, la frontière sort de la cellule et les deux échantillons
+  // basculent : le premier resterait rouge, le second passerait au bleu.
+  expect(result.before[2]).toBeGreaterThan(200)
+  expect(result.after[0]).toBeGreaterThan(200)
+})
