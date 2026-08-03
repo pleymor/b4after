@@ -128,3 +128,15 @@ test('crée un point de vue depuis la première photo', async ({ page }) => {
   expect(stored.shot).toEqual(native)
   expect(stored.transform).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
 })
+
+test('affiche le fantôme de la dernière photo à la reprise', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/capture`)
+
+  const ghost = page.getByTestId('ghost')
+  await expect(ghost).toBeVisible()
+  await expect(ghost).toHaveCSS('opacity', '0.5')
+
+  await page.getByTestId('opacity-slider').fill('0.8')
+  await expect(ghost).toHaveCSS('opacity', '0.8')
+})

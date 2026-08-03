@@ -8,6 +8,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<ViewpointListScreen />} />
         <Route path="/capture" element={<CameraScreen />} />
+        <Route path="/v/:id/capture" element={<CameraScreen />} />
       </Routes>
     </BrowserRouter>
   )
