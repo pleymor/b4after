@@ -111,3 +111,107 @@ test("makeThumbnail n'agrandit jamais", async ({ page }) => {
 
   expect(size).toEqual({ width: 80, height: 60 })
 })
+
+test('renderSideBySide accole deux photos portrait horizontalement', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return canvas.transferToImageBitmap()
+    }
+
+    const frame = { width: 100, height: 150 }
+    const input = (color) => ({
+      source: solid(color),
+      transform: IDENTITY,
+      takenAt: Date.UTC(2026, 6, 31, 12),
+      shot: frame,
+    })
+
+    const blob = await renderSideBySide(input('#ff0000'), input('#0000ff'), frame, {
+      showDates: false,
+    })
+    const decoded = await createImageBitmap(blob)
+    const canvas = new OffscreenCanvas(decoded.width, decoded.height)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(decoded, 0, 0)
+
+    return {
+      type: blob.type,
+      width: decoded.width,
+      height: decoded.height,
+      left: window.__pixel(ctx, 50, 75),
+      right: window.__pixel(ctx, 158, 75),
+    }
+  }, HELPERS)
+
+  // 2 x 100 px + 8 px de séparateur, hauteur inchangée puisque showDates est faux.
+  expect(result).toMatchObject({ type: 'image/jpeg', width: 208, height: 150 })
+  expect(result.left[0]).toBeGreaterThan(200)
+  expect(result.right[2]).toBeGreaterThan(200)
+})
+
+test('renderSideBySide empile deux photos paysage verticalement', async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 150, height: 100 }
+    const bitmap = window.__stripes(150, 100)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { showDates: false }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  expect(size).toEqual({ width: 150, height: 208 })
+})
+
+test('renderSideBySide réserve un bandeau pour les dates', async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: Date.UTC(2026, 6, 31, 12), shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { showDates: true }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  // Bandeau = round(100 * 0.14) = 14 px sous chaque photo.
+  expect(size).toEqual({ width: 208, height: 164 })
+})
+
+test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 3000, height: 4000 }
+    const bitmap = window.__stripes(300, 400)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { showDates: false }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  // Facteur 2048/4000 = 0.512 : cellule de 1536 x 2048.
+  expect(size).toEqual({ width: 1536 * 2 + 8, height: 2048 })
+})
