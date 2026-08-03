@@ -1,7 +1,12 @@
 import { toMatrix } from '@/align/transform'
 import type { Size, Transform } from '@/types'
 
-export type Drawable = ImageBitmap | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas
+export type Drawable =
+  | ImageBitmap
+  | HTMLImageElement
+  | HTMLCanvasElement
+  | HTMLVideoElement
+  | OffscreenCanvas
 export type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
 /**

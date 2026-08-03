@@ -82,7 +82,18 @@ test('crée un point de vue depuis la première photo', async ({ page }) => {
   await page.getByRole('button', { name: "J'ai compris" }).click()
   await page.getByTestId('new-viewpoint').click()
 
-  await page.getByTestId('shutter').click()
+  // Relever les dimensions natives du flux avant de déclencher : c est à elles que
+  // le cadre canonique devra être égal, et non à une résolution supposée.
+  const shutter = page.getByTestId('shutter')
+  await expect(shutter).toBeEnabled()
+  await expect
+    .poll(() => page.locator('video').evaluate((el: HTMLVideoElement) => el.videoWidth))
+    .toBeGreaterThan(0)
+  const native = await page
+    .locator('video')
+    .evaluate((el: HTMLVideoElement) => ({ width: el.videoWidth, height: el.videoHeight }))
+
+  await shutter.click()
 
   const sheet = page.getByTestId('name-sheet')
   await expect(sheet).toBeVisible()
@@ -93,4 +104,27 @@ test('crée un point de vue depuis la première photo', async ({ page }) => {
 
   await expect(page.getByTestId('viewpoint-item')).toContainText('Cuisine')
   await expect(page.getByTestId('viewpoint-item')).toContainText('1 photo')
+
+  // Le cadre canonique et la transformation identité portent toutes les tâches
+  // suivantes, et aucun écran ne les affiche : on les vérifie donc en base.
+  const stored = await page.evaluate(async () => {
+    const { listViewpoints } = await import('/src/db/viewpoints.ts')
+    const { listShots } = await import('/src/db/shots.ts')
+    const [viewpoint] = await listViewpoints()
+    const [shot] = await listShots(viewpoint.id)
+    return {
+      frame: { width: viewpoint.frameWidth, height: viewpoint.frameHeight },
+      shot: { width: shot.width, height: shot.height },
+      transform: shot.transform,
+    }
+  })
+
+  // On compare aux dimensions natives relevées sur le flux, jamais à une résolution
+  // codée en dur : la caméra synthétique de Chromium honore les contraintes
+  // « idéales », donc sa sortie coïncide avec les valeurs demandées et une constante
+  // ne discriminerait pas la régression qu on veut attraper — stocker les valeurs
+  // demandées au lieu des dimensions réelles.
+  expect(stored.frame).toEqual(native)
+  expect(stored.shot).toEqual(native)
+  expect(stored.transform).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
 })

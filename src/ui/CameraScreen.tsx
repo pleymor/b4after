@@ -1,9 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { IDENTITY } from '@/align/transform'
 import { useCamera, type CapturedFrame } from '@/camera/useCamera'
-import { addShot } from '@/db/shots'
-import { createViewpoint, nextViewpointName } from '@/db/viewpoints'
+import { createViewpointWithFirstShot, nextViewpointName } from '@/db/viewpoints'
 import { CameraDeniedNotice } from './components/CameraDeniedNotice'
 import { Screen } from './components/Screen'
 
@@ -34,23 +32,19 @@ export function CameraScreen() {
     setBusy(true)
     setError(null)
     try {
-      const viewpoint = await createViewpoint({
-        name: name.trim() || 'Point de vue',
-        frameWidth: captured.width,
-        frameHeight: captured.height,
-      })
-      await addShot({
-        viewpointId: viewpoint.id,
-        blob: captured.blob,
-        thumbBlob: captured.thumbBlob,
+      // Une seule transaction : un échec ne doit pas laisser un point de vue sans
+      // photo dans la liste, ni chaque nouvelle tentative en créer un de plus.
+      await createViewpointWithFirstShot({
+        name: name.trim() || (await nextViewpointName()),
         width: captured.width,
         height: captured.height,
-        transform: IDENTITY,
+        blob: captured.blob,
+        thumbBlob: captured.thumbBlob,
       })
       navigate('/', { replace: true })
     } catch {
       // La photo reste en mémoire : l utilisateur peut réessayer sans la reprendre.
-      setError("L enregistrement a échoué. L espace de stockage est peut-être plein.")
+      setError("L'enregistrement a échoué. L'espace de stockage est peut-être plein.")
       setBusy(false)
     }
   }

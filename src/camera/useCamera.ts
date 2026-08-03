@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { makeThumbnail } from '@/render/thumbnail'
+import { toJpegBlob } from '@/render/toJpegBlob'
 
 export type CameraStatus = 'starting' | 'ready' | 'denied' | 'unavailable'
 
@@ -71,8 +72,14 @@ export function useCamera(options: { aspectRatio?: number }) {
   // Android coupe la piste vidéo quand l onglet passe en arrière-plan : on relance.
   useEffect(() => {
     function onVisibility() {
-      const live = streamRef.current?.getVideoTracks().some((t) => t.readyState === 'live')
-      if (document.visibilityState === 'visible' && !live) setNonce((n) => n + 1)
+      if (document.visibilityState !== 'visible') return
+      // Ne rien faire tant qu aucun flux n a été obtenu : soit une ouverture est en
+      // cours — et relancer déclencherait un second getUserMedia concurrent, donc
+      // une seconde demande de permission — soit l accès a été refusé, et c est au
+      // bouton « Réessayer » de reprendre la main.
+      if (!streamRef.current) return
+      const live = streamRef.current.getVideoTracks().some((t) => t.readyState === 'live')
+      if (!live) setNonce((n) => n + 1)
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
@@ -84,12 +91,8 @@ export function useCamera(options: { aspectRatio?: number }) {
 
     const width = video.videoWidth
     const height = video.videoHeight
-    const canvas = new OffscreenCanvas(width, height)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Contexte 2D indisponible')
-    ctx.drawImage(video, 0, 0, width, height)
 
-    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: CAPTURE_QUALITY })
+    const blob = await toJpegBlob(video, { width, height }, CAPTURE_QUALITY)
     const bitmap = await createImageBitmap(blob)
     try {
       const thumbBlob = await makeThumbnail(bitmap, { width, height })

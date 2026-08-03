@@ -1,5 +1,6 @@
 import type { Size } from '@/types'
 import type { Drawable } from './drawShot'
+import { toJpegBlob } from './toJpegBlob'
 
 export const THUMB_MAX_EDGE = 320
 export const THUMB_QUALITY = 0.7
@@ -11,13 +12,9 @@ export function fitFactor(size: Size, maxEdge: number): number {
 
 export async function makeThumbnail(source: Drawable, shot: Size): Promise<Blob> {
   const factor = fitFactor(shot, THUMB_MAX_EDGE)
-  const width = Math.round(shot.width * factor)
-  const height = Math.round(shot.height * factor)
-
-  const canvas = new OffscreenCanvas(width, height)
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Contexte 2D indisponible')
-  ctx.drawImage(source, 0, 0, width, height)
-
-  return canvas.convertToBlob({ type: 'image/jpeg', quality: THUMB_QUALITY })
+  return toJpegBlob(
+    source,
+    { width: Math.round(shot.width * factor), height: Math.round(shot.height * factor) },
+    THUMB_QUALITY,
+  )
 }
