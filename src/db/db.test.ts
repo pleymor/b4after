@@ -90,6 +90,11 @@ describe('viewpoints', () => {
   it('agrège le nombre de photos, la dernière date et la vignette', async () => {
     const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
     await seedShot(vp.id, 'ancienne')
+    // Sans ce délai les deux clichés peuvent partager la même milliseconde : la clé
+    // composite [viewpointId, takenAt] est alors à égalité et IndexedDB départage
+    // sur la clé primaire, un UUID aléatoire. La vignette choisie deviendrait
+    // non déterministe.
+    await new Promise((r) => setTimeout(r, 2))
     const recent = await seedShot(vp.id, 'recente')
 
     const [summary] = await listViewpoints()
