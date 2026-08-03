@@ -248,3 +248,77 @@ test('revenir à l écran de calage sans photo en attente renvoie à la série',
   await page.goto(`/v/${viewpointId}/align`)
   await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
 })
+
+test('présélectionne la plus ancienne et la plus récente', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  // Une deuxième photo, ajoutée directement en base.
+  await page.evaluate(async (id) => {
+    const { addShot } = await import('/src/db/shots.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+    const canvas = new OffscreenCanvas(300, 400)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#0000ff'
+    ctx.fillRect(0, 0, 300, 400)
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+    await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+  }, viewpointId)
+
+  await page.goto(`/v/${viewpointId}`)
+  await expect(page.getByTestId('shot-item')).toHaveCount(2)
+
+  const items = page.getByTestId('shot-item')
+  await expect(items.nth(0).getByTestId('select-before')).toBeChecked()
+  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
+
+  await page.getByTestId('compare').click()
+  await expect(page).toHaveURL(/\/compare\?before=.+&after=.+/)
+})
+
+test('refuse de comparer une seule photo', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}`)
+  await expect(page.getByTestId('compare')).toBeDisabled()
+})
+
+test('supprime une photo puis le point de vue', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}`)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('delete-shot').first().click()
+  await expect(page.getByTestId('shot-item')).toHaveCount(0)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('delete-viewpoint').click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByTestId('empty-state')).toBeVisible()
+})
+
+test('supprimer la première photo ne change pas le cadre canonique', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}`)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('delete-shot').first().click()
+  await expect(page.getByTestId('shot-item')).toHaveCount(0)
+
+  // Le cadre est porté par le point de vue, pas par ses photos : les calages déjà
+  // enregistrés resteraient valides même après avoir vidé la série.
+  const frame = await page.evaluate(async (id) => {
+    const { getViewpoint } = await import('/src/db/viewpoints.ts')
+    const found = await getViewpoint(id)
+    return { width: found.frameWidth, height: found.frameHeight }
+  }, viewpointId)
+  expect(frame).toEqual({ width: 300, height: 400 })
+})
+
+test('renomme le point de vue', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}`)
+
+  await page.getByTestId('rename').click()
+  await page.getByTestId('name-input').fill('Cuisine')
+  await page.getByTestId('name-confirm').click()
+
+  await expect(page.getByRole('heading', { name: 'Cuisine' })).toBeVisible()
+})
