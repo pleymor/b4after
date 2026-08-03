@@ -33,12 +33,16 @@ function ShotRow({
       <p className="flex-1 text-sm">{formatDate(shot.takenAt)}</p>
       <label className="flex flex-col items-center text-xs text-slate-300">
         Avant
+        {/* Le libellé visible « Avant » est identique sur chaque ligne : sans nom
+            accessible qualifié, un lecteur d écran l annonce autant de fois que la
+            série compte de photos, sans dire laquelle. */}
         <input
           type="radio"
           name="before"
           data-testid="select-before"
           checked={isBefore}
           onChange={onSelectBefore}
+          aria-label={`Choisir la photo du ${formatDate(shot.takenAt)} comme avant`}
         />
       </label>
       <label className="flex flex-col items-center text-xs text-slate-300">
@@ -49,6 +53,7 @@ function ShotRow({
           data-testid="select-after"
           checked={isAfter}
           onChange={onSelectAfter}
+          aria-label={`Choisir la photo du ${formatDate(shot.takenAt)} comme après`}
         />
       </label>
       <button
@@ -81,31 +86,52 @@ export function ViewpointDetailScreen() {
   const [before, setBefore] = useState<string | null>(null)
   const [after, setAfter] = useState<string | null>(null)
 
-  // La comparaison attendue par défaut : la plus ancienne contre la plus récente.
+  /**
+   * La comparaison attendue par défaut : la plus ancienne contre la plus récente.
+   *
+   * On ne réinitialise que si la sélection courante a disparu. Repartir des valeurs
+   * par défaut à chaque rechargement effacerait le choix de l utilisateur dès qu il
+   * supprime une photo sans rapport avec la comparaison en cours.
+   */
   useEffect(() => {
-    if (shots.length < 2) {
-      setBefore(shots[0]?.id ?? null)
-      setAfter(null)
-      return
-    }
-    setBefore(shots[0].id)
-    setAfter(shots[shots.length - 1].id)
+    const present = new Set(shots.map((shot) => shot.id))
+    setBefore((current) => (current && present.has(current) ? current : (shots[0]?.id ?? null)))
+    setAfter((current) =>
+      current && present.has(current)
+        ? current
+        : shots.length >= 2
+          ? shots[shots.length - 1].id
+          : null,
+    )
   }, [shots])
 
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
+  // Ces deux actions sont annoncées comme définitives : un échec silencieux
+  // laisserait l utilisateur croire qu elles ont abouti.
   async function onDeleteShot(shotId: string) {
     if (!window.confirm('Supprimer cette photo ? Cette action est définitive.')) return
-    await deleteShot(shotId)
-    reload()
+    setError(null)
+    try {
+      await deleteShot(shotId)
+      reload()
+    } catch {
+      setError('La suppression a échoué. Réessayez.')
+    }
   }
 
   async function onDeleteViewpoint() {
     if (!id) return
     if (!window.confirm('Supprimer ce point de vue et toutes ses photos ?')) return
-    await deleteViewpoint(id)
-    navigate('/', { replace: true })
+    setError(null)
+    try {
+      await deleteViewpoint(id)
+      navigate('/', { replace: true })
+    } catch {
+      setError('La suppression a échoué. Réessayez.')
+    }
   }
 
   return (
@@ -175,6 +201,11 @@ export function ViewpointDetailScreen() {
         >
           Supprimer ce point de vue
         </button>
+        {error && (
+          <p data-testid="detail-error" className="rounded-lg bg-red-900/90 p-3 text-sm">
+            {error}
+          </p>
+        )}
       </div>
 
       {renaming && (
@@ -204,9 +235,13 @@ export function ViewpointDetailScreen() {
                 onClick={async () => {
                   if (!id) return
                   const name = draftName.trim() || (viewpoint?.name ?? '')
-                  await renameViewpoint(id, name)
-                  setViewpoint((current) => (current ? { ...current, name } : current))
-                  setRenaming(false)
+                  try {
+                    await renameViewpoint(id, name)
+                    setViewpoint((current) => (current ? { ...current, name } : current))
+                    setRenaming(false)
+                  } catch {
+                    setError('Le renommage a échoué. Réessayez.')
+                  }
                 }}
                 className="flex-1 rounded-xl bg-sky-500 py-3 font-semibold text-slate-950"
               >

@@ -251,7 +251,9 @@ test('revenir à l écran de calage sans photo en attente renvoie à la série',
 
 test('présélectionne la plus ancienne et la plus récente', async ({ page }) => {
   const { viewpointId } = await seed(page, 'Façade nord')
-  // Une deuxième photo, ajoutée directement en base.
+  // Deux photos de plus : avec trois clichés, « la plus ancienne et la plus récente »
+  // se distingue de « les deux premières », ce qu un fixture à deux photos ne
+  // permettait pas.
   await page.evaluate(async (id) => {
     const { addShot } = await import('/src/db/shots.ts')
     const { IDENTITY } = await import('/src/align/transform.ts')
@@ -260,18 +262,62 @@ test('présélectionne la plus ancienne et la plus récente', async ({ page }) =
     ctx.fillStyle = '#0000ff'
     ctx.fillRect(0, 0, 300, 400)
     const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
-    await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 2))
+      await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+    }
   }, viewpointId)
 
   await page.goto(`/v/${viewpointId}`)
-  await expect(page.getByTestId('shot-item')).toHaveCount(2)
+  await expect(page.getByTestId('shot-item')).toHaveCount(3)
 
   const items = page.getByTestId('shot-item')
   await expect(items.nth(0).getByTestId('select-before')).toBeChecked()
-  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
+  await expect(items.nth(2).getByTestId('select-after')).toBeChecked()
+  // La photo du milieu n est ni l avant ni l après.
+  await expect(items.nth(1).getByTestId('select-before')).not.toBeChecked()
+  await expect(items.nth(1).getByTestId('select-after')).not.toBeChecked()
 
   await page.getByTestId('compare').click()
   await expect(page).toHaveURL(/\/compare\?before=.+&after=.+/)
+})
+
+test('la sélection manuelle survit à la suppression d une autre photo', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  // Deux photos de plus, pour disposer d une photo « du milieu » distincte de l avant
+  // et de l après par défaut.
+  await page.evaluate(async (id) => {
+    const { addShot } = await import('/src/db/shots.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+    const canvas = new OffscreenCanvas(300, 400)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#0000ff'
+    ctx.fillRect(0, 0, 300, 400)
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 2))
+      await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+    }
+  }, viewpointId)
+
+  await page.goto(`/v/${viewpointId}`)
+  const items = page.getByTestId('shot-item')
+  await expect(items).toHaveCount(3)
+
+  // On choisit la photo du milieu comme « après », à la place de la plus récente
+  // présélectionnée par défaut.
+  await items.nth(1).getByTestId('select-after').check()
+  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
+
+  // On supprime une autre photo que celles sélectionnées : la plus récente.
+  page.once('dialog', (dialog) => dialog.accept())
+  await items.nth(2).getByTestId('delete-shot').click()
+  await expect(items).toHaveCount(2)
+
+  // La sélection — avant = la plus ancienne, après = celle du milieu — doit avoir
+  // survécu : ce n est pas elle qui a disparu.
+  await expect(items.nth(0).getByTestId('select-before')).toBeChecked()
+  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
 })
 
 test('refuse de comparer une seule photo', async ({ page }) => {
