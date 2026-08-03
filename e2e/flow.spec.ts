@@ -77,3 +77,20 @@ test('liste les points de vue avec leurs agrégats', async ({ page }) => {
   await expect(item).toContainText('Façade nord')
   await expect(item).toContainText('1 photo')
 })
+
+test('crée un point de vue depuis la première photo', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  await page.getByTestId('shutter').click()
+
+  const sheet = page.getByTestId('name-sheet')
+  await expect(sheet).toBeVisible()
+  await expect(page.getByTestId('name-input')).toHaveValue('Point de vue 1')
+
+  await page.getByTestId('name-input').fill('Cuisine')
+  await page.getByTestId('name-confirm').click()
+
+  await expect(page.getByTestId('viewpoint-item')).toContainText('Cuisine')
+  await expect(page.getByTestId('viewpoint-item')).toContainText('1 photo')
+})
