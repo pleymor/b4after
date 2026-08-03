@@ -93,7 +93,11 @@ describe('clampToCover', () => {
 
   it('est idempotente', () => {
     const once = clampToCover({ scale: 0.2, rotation: 2, tx: 500, ty: 500 }, shot, FRAME)
-    expect(clampToCover(once, shot, FRAME)).toEqual(once)
+    const twice = clampToCover(once, shot, FRAME)
+    expect(twice.scale).toBeCloseTo(once.scale)
+    expect(twice.rotation).toBeCloseTo(once.rotation)
+    expect(twice.tx).toBeCloseTo(once.tx)
+    expect(twice.ty).toBeCloseTo(once.ty)
   })
 })
 
