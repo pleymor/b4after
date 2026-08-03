@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { createGestureState, gestureReducer, type GestureEvent } from '@/align/gesture'
+import { toFrameCoords } from '@/align/surface'
 import { IDENTITY, clampToCover } from '@/align/transform'
 import { peekPendingShot, takePendingShot } from '@/capture/pendingShot'
 import { addShot } from '@/db/shots'
@@ -50,17 +51,17 @@ export function AlignScreen() {
   const [error, setError] = useState<string | null>(null)
 
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const writingRef = useRef(false)
   const gestureRef = useRef(createGestureState(initial, shotSize, frame))
   useEffect(() => {
     gestureRef.current = createGestureState(initial, shotSize, frame)
   }, [initial, shotSize, frame])
 
   /** Convertit un pointeur en pixels du cadre canonique, ce qu attend le réducteur. */
-  function toFrameCoords(event: React.PointerEvent) {
+  function pointerToFrame(event: React.PointerEvent) {
     const rect = surfaceRef.current?.getBoundingClientRect()
-    if (!rect || rect.width === 0) return { x: 0, y: 0 }
-    const ratio = frame.width / rect.width
-    return { x: (event.clientX - rect.left) * ratio, y: (event.clientY - rect.top) * ratio }
+    if (!rect) return { x: 0, y: 0 }
+    return toFrameCoords({ x: event.clientX, y: event.clientY }, rect, frame)
   }
 
   function dispatch(event: GestureEvent) {
@@ -69,8 +70,13 @@ export function AlignScreen() {
   }
 
   async function onConfirm() {
-    const shot = takePendingShot()
+    // Garde synchrone : `busy` ne prend effet qu au rendu suivant, donc deux tapes
+    // rapprochées pourraient toutes deux entrer ici.
+    if (writingRef.current) return
+    const shot = peekPendingShot()
     if (!shot || !id) return
+
+    writingRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -82,9 +88,14 @@ export function AlignScreen() {
         height: shot.captured.height,
         transform,
       })
+      // Ne consommer la photo qu après une écriture réussie. La drainer avant
+      // rendrait tout échec irrécupérable : « Valider » redeviendrait un no-op
+      // silencieux, et la photo serait définitivement perdue.
+      takePendingShot()
       navigate(`/v/${id}`, { replace: true })
     } catch {
-      // On garde l écran et la photo en mémoire pour permettre un nouvel essai.
+      // La photo reste en attente : un nouvel essai est possible sans reprendre.
+      writingRef.current = false
       setError("L'enregistrement a échoué. L'espace de stockage est peut-être plein.")
       setBusy(false)
     }
@@ -116,11 +127,11 @@ export function AlignScreen() {
           style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId)
-            const { x, y } = toFrameCoords(event)
+            const { x, y } = pointerToFrame(event)
             dispatch({ type: 'down', id: event.pointerId, x, y })
           }}
           onPointerMove={(event) => {
-            const { x, y } = toFrameCoords(event)
+            const { x, y } = pointerToFrame(event)
             dispatch({ type: 'move', id: event.pointerId, x, y })
           }}
           onPointerUp={(event) => dispatch({ type: 'up', id: event.pointerId })}
