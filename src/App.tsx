@@ -1,3 +1,12 @@
+import { BrowserRouter, Route, Routes } from 'react-router'
+import { ViewpointListScreen } from './ui/ViewpointListScreen'
+
 export default function App() {
-  return <div className="p-6 text-lg">b4after</div>
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<ViewpointListScreen />} />
+      </Routes>
+    </BrowserRouter>
+  )
 }
