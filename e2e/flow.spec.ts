@@ -177,3 +177,74 @@ test("la reprise sur un identifiant inexistant n'écrit rien en base", async ({ 
   })
   expect(viewpointCount).toBe(0)
 })
+
+test('la reprise mène à l écran de calage sans rien écrire en base', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/capture`)
+
+  await page.getByTestId('shutter').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`))
+
+  // La photo capturée ne doit pas encore être en base : elle ne rejoint la série
+  // qu après validation du calage.
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(1)
+})
+
+test('valide un calage et ajoute la photo à la série', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/capture`)
+  await page.getByTestId('shutter').click()
+
+  const surface = page.getByTestId('align-surface')
+  await expect(surface).toBeVisible()
+
+  // Un glissement doit modifier la transformation, sans jamais sortir du cadre.
+  const box = (await surface.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 5 })
+  await page.mouse.up()
+
+  await page.getByTestId('align-confirm').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+
+  const shots = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).map((shot) => shot.transform)
+  }, viewpointId)
+
+  expect(shots).toHaveLength(2)
+  expect(shots[1].tx).not.toBe(0)
+})
+
+test('remettre à zéro annule le calage en cours', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/capture`)
+  await page.getByTestId('shutter').click()
+
+  const surface = page.getByTestId('align-surface')
+  const box = (await surface.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 5 })
+  await page.mouse.up()
+
+  await page.getByTestId('align-reset').click()
+  await page.getByTestId('align-confirm').click()
+
+  const shots = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).map((shot) => shot.transform)
+  }, viewpointId)
+  expect(shots[1].tx).toBe(0)
+})
+
+test('revenir à l écran de calage sans photo en attente renvoie à la série', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/align`)
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+})
