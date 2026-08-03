@@ -67,9 +67,13 @@ test('affiche un état vide et l avertissement de premier lancement', async ({ p
 test('liste les points de vue avec leurs agrégats', async ({ page }) => {
   await seed(page, 'Façade nord')
   await page.reload()
+  // Écarter l avertissement avant d asserter : c est un overlay plein écran, donc
+  // sans ça on vérifierait du contenu que l utilisateur ne peut ni voir ni toucher.
+  await page.getByRole('button', { name: "J'ai compris" }).click()
 
   const item = page.getByTestId('viewpoint-item')
   await expect(item).toHaveCount(1)
+  await expect(item).toBeVisible()
   await expect(item).toContainText('Façade nord')
   await expect(item).toContainText('1 photo')
 })

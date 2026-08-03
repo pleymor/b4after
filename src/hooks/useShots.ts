@@ -8,7 +8,13 @@ export function useShots(viewpointId: string | undefined) {
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
-    if (!viewpointId) return
+    if (!viewpointId) {
+      // Sans remettre `loading` à faux, un appelant dont l identifiant n est pas
+      // encore résolu resterait bloqué sur un chargement perpétuel.
+      setShots([])
+      setLoading(false)
+      return
+    }
     let active = true
     setLoading(true)
     listShots(viewpointId).then((result) => {
