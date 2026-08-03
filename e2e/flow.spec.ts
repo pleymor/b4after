@@ -129,14 +129,51 @@ test('crée un point de vue depuis la première photo', async ({ page }) => {
   expect(stored.transform).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
 })
 
-test('affiche le fantôme de la dernière photo à la reprise', async ({ page }) => {
-  const { viewpointId } = await seed(page, 'Façade nord')
-  await page.goto(`/v/${viewpointId}/capture`)
+test('le fantôme montre la dernière photo, pas la première', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord') // première photo, rouge
+  // Deuxième photo, bleue : c est elle que le fantôme doit montrer.
+  await page.evaluate(async (id) => {
+    const { addShot } = await import('/src/db/shots.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+    const canvas = new OffscreenCanvas(300, 400)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#0000ff'
+    ctx.fillRect(0, 0, 300, 400)
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+    await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+  }, viewpointId)
 
+  await page.goto(`/v/${viewpointId}/capture`)
   const ghost = page.getByTestId('ghost')
   await expect(ghost).toBeVisible()
   await expect(ghost).toHaveCSS('opacity', '0.5')
 
+  // Échantillonner le centre du calque : bleu = dernière photo, rouge = première.
+  // Sans cette assertion, remplacer shots.at(-1) par shots.at(0) passerait le test.
+  await expect
+    .poll(() =>
+      ghost.evaluate((el: HTMLCanvasElement) => {
+        const ctx = el.getContext('2d')!
+        const { data } = ctx.getImageData(Math.floor(el.width / 2), Math.floor(el.height / 2), 1, 1)
+        return data[2] > data[0] ? 'bleu' : 'rouge'
+      }),
+    )
+    .toBe('bleu')
+
   await page.getByTestId('opacity-slider').fill('0.8')
   await expect(ghost).toHaveCSS('opacity', '0.8')
+})
+
+test("la reprise sur un identifiant inexistant n'écrit rien en base", async ({ page }) => {
+  await page.goto('/v/identifiant-inexistant/capture')
+
+  await expect(page.getByText("Ce point de vue n'existe plus.")).toBeVisible()
+
+  // Le garde était `isRetake && id && frame` : un `frame` jamais résolu retombait dans
+  // le flux « première photo », où confirmer le nom crée un point de vue parasite.
+  const viewpointCount = await page.evaluate(async () => {
+    const { listViewpoints } = await import('/src/db/viewpoints.ts')
+    return (await listViewpoints()).length
+  })
+  expect(viewpointCount).toBe(0)
 })
