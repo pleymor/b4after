@@ -255,3 +255,85 @@ test('renderSideBySide réduit aussi la translation stockée', async ({ page }) 
   expect(result.before[2]).toBeGreaterThan(200)
   expect(result.after[0]).toBeGreaterThan(200)
 })
+
+test('renderCrossfadeGif produit un GIF animé de 10 frames', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const input = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeGif(input('#ff0000'), input('#0000ff'), frame, {
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    return {
+      type: blob.type,
+      header: String.fromCharCode(...bytes.slice(0, 6)),
+      // Largeur et hauteur logiques, en little-endian aux octets 6 à 9.
+      width: bytes[6] | (bytes[7] << 8),
+      height: bytes[8] | (bytes[9] << 8),
+      trailer: bytes[bytes.length - 1],
+      progress,
+    }
+  }, HELPERS)
+
+  expect(result.type).toBe('image/gif')
+  expect(result.header).toBe('GIF89a')
+  expect(result.width).toBe(100)
+  expect(result.height).toBe(150)
+  expect(result.trailer).toBe(0x3b)
+  expect(result.progress.at(-1)).toEqual([10, 10])
+})
+
+test('renderCrossfadeGif réduit la largeur à 640 px', async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 1200, height: 1600 }
+    const bitmap = window.__stripes(1200, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (await renderCrossfadeGif(input, input, frame)).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  expect(size).toEqual({ width: 640, height: 853 })
+})
+
+test('renderCrossfadeGif honore l annulation', async ({ page }) => {
+  const message = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const controller = new AbortController()
+    controller.abort()
+    try {
+      await renderCrossfadeGif(input, input, frame, { signal: controller.signal })
+      return 'pas d erreur'
+    } catch (error) {
+      return error.name
+    }
+  }, HELPERS)
+
+  expect(message).toBe('AbortError')
+})
