@@ -65,6 +65,28 @@ describe('viewpoints', () => {
     expect(await getShot(shot.id)).toBeUndefined()
   })
 
+  it('supprime toute la série en cascade, sans toucher aux autres points de vue', async () => {
+    // Amorcer plusieurs photos est indispensable : avec une seule, une cascade
+    // qui ne supprimerait que le premier résultat du curseur passerait le test.
+    const cible = await createViewpoint({ name: 'Cible', frameWidth: 400, frameHeight: 600 })
+    const premiere = await seedShot(cible.id, 'a')
+    await new Promise((r) => setTimeout(r, 2))
+    const deuxieme = await seedShot(cible.id, 'b')
+    const troisieme = await seedShot(cible.id, 'c')
+
+    const voisin = await createViewpoint({ name: 'Voisin', frameWidth: 400, frameHeight: 600 })
+    const survivante = await seedShot(voisin.id, 'survivante')
+
+    await deleteViewpoint(cible.id)
+
+    expect(await listShots(cible.id)).toEqual([])
+    expect(await getShot(premiere.id)).toBeUndefined()
+    expect(await getShot(deuxieme.id)).toBeUndefined()
+    expect(await getShot(troisieme.id)).toBeUndefined()
+    // La borne de l index ne doit pas déborder sur le point de vue voisin.
+    expect(await getShot(survivante.id)).toBeDefined()
+  })
+
   it('agrège le nombre de photos, la dernière date et la vignette', async () => {
     const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
     await seedShot(vp.id, 'ancienne')
