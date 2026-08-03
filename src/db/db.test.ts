@@ -112,7 +112,9 @@ describe('viewpoints', () => {
   })
 
   it('classe le cliché le plus récent en premier, les points de vue vides en dernier', async () => {
-    const vide = await createViewpoint({ name: 'Vide', frameWidth: 1, frameHeight: 1 })
+    // Pas de liaison : seule l'existence de ce point de vue compte, et `tsc -b`
+    // tourne avec noUnusedLocals — une variable non lue casserait le build.
+    await createViewpoint({ name: 'Vide', frameWidth: 1, frameHeight: 1 })
     const ancien = await createViewpoint({ name: 'Ancien', frameWidth: 1, frameHeight: 1 })
     const recent = await createViewpoint({ name: 'Récent', frameWidth: 1, frameHeight: 1 })
     await seedShot(ancien.id)
