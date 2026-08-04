@@ -368,3 +368,52 @@ test('renomme le point de vue', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Cuisine' })).toBeVisible()
 })
+
+/** Ajoute une seconde photo bleue et renvoie l URL de comparaison. */
+async function seedPair(page: import('@playwright/test').Page) {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  const ids = await page.evaluate(async (id) => {
+    const { addShot, listShots } = await import('/src/db/shots.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+    const canvas = new OffscreenCanvas(300, 400)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#0000ff'
+    ctx.fillRect(0, 0, 300, 400)
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+    await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+    const shots = await listShots(id)
+    return { before: shots[0].id, after: shots[1].id }
+  }, viewpointId)
+  return { viewpointId, ...ids }
+}
+
+test('exporte une image côte-à-côte', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await expect(page.getByTestId('reveal-slider')).toBeVisible()
+
+  const download = page.waitForEvent('download')
+  await page.getByTestId('export-jpeg').click()
+  const file = await download
+
+  expect(file.suggestedFilename()).toMatch(/^b4after-facade-nord-\d{4}-\d{2}-\d{2}\.jpg$/)
+})
+
+test('exporte un GIF animé avec une progression', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  const download = page.waitForEvent('download')
+  await page.getByTestId('export-gif').click()
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+  const file = await download
+
+  expect(file.suggestedFilename()).toMatch(/\.gif$/)
+})
+
+test('signale une comparaison introuvable', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/compare?before=inconnu&after=inconnu`)
+  await expect(page.getByTestId('export-status')).toContainText('introuvable')
+})
