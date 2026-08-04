@@ -560,3 +560,58 @@ test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({
   await page.getByTestId('export-jpeg').click()
   expect((await download).suggestedFilename()).toContain('salle-de-bain')
 })
+
+test("déclencher coupe réellement le flux caméra, pas seulement son affichage", async ({
+  page,
+}) => {
+  // Compte les appels à `stop` sur toute piste de tout flux, posé avant même que la
+  // page ne charge le moindre script : un simple masquage CSS de la vidéo laisserait
+  // ce compteur à zéro, puisque la piste continuerait de tourner.
+  await page.addInitScript(() => {
+    const originalStop = MediaStreamTrack.prototype.stop
+    ;(window as unknown as { __stopCalls: number }).__stopCalls = 0
+    MediaStreamTrack.prototype.stop = function stop(...args) {
+      ;(window as unknown as { __stopCalls: number }).__stopCalls += 1
+      return originalStop.apply(this, args)
+    }
+  })
+
+  await resetDb(page)
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  const shutter = page.getByTestId('shutter')
+  await expect(shutter).toBeEnabled()
+
+  const stopCallsBefore = await page.evaluate(
+    () => (window as unknown as { __stopCalls: number }).__stopCalls,
+  )
+
+  await shutter.click()
+
+  await expect(page.getByTestId('captured-preview')).toBeVisible()
+  await expect(page.locator('video')).toHaveCount(0)
+  await expect(shutter).toHaveCount(0)
+
+  const stopCallsAfter = await page.evaluate(
+    () => (window as unknown as { __stopCalls: number }).__stopCalls,
+  )
+  expect(stopCallsAfter).toBeGreaterThan(stopCallsBefore)
+})
+
+test('« Reprendre » relance la caméra', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  const shutter = page.getByTestId('shutter')
+  await expect(shutter).toBeEnabled()
+  await shutter.click()
+
+  await expect(page.getByTestId('captured-preview')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Reprendre' }).click()
+
+  await expect(page.locator('video')).toBeVisible()
+  await expect(page.getByTestId('shutter')).toBeVisible()
+  await expect(page.getByTestId('captured-preview')).toHaveCount(0)
+})
