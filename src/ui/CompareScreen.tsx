@@ -63,8 +63,9 @@ export function CompareScreen() {
     }).catch(() => setStatus('Impossible de lire cette comparaison.'))
   }, [id, params])
 
-  const beforeBitmap = useBitmap(pair?.before.blob)
-  const afterBitmap = useBitmap(pair?.after.blob)
+  const { bitmap: beforeBitmap, error: beforeBitmapError } = useBitmap(pair?.before.blob)
+  const { bitmap: afterBitmap, error: afterBitmapError } = useBitmap(pair?.after.blob)
+  const bitmapError = beforeBitmapError || afterBitmapError
 
   const frame: Size | null = viewpoint
     ? { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
@@ -190,7 +191,11 @@ export function CompareScreen() {
             </label>
 
             {!ready && (
-              <p className="text-center text-sm text-slate-400">Préparation des photos…</p>
+              <p className="text-center text-sm text-slate-400">
+                {bitmapError
+                  ? 'Impossible de préparer ces photos pour la comparaison.'
+                  : 'Préparation des photos…'}
+              </p>
             )}
 
             <button

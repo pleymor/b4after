@@ -78,6 +78,32 @@ test('liste les points de vue avec leurs agrégats', async ({ page }) => {
   await expect(item).toContainText('1 photo')
 })
 
+test('reprend une photo en trois tapes depuis l accueil', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.reload()
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+
+  // Tape 1 : « Reprendre » sur la ligne mène directement à la capture, sans passer
+  // par l écran de détail — c est ce qui ramène le parcours à trois tapes.
+  await page.getByTestId('retake').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/capture$`))
+
+  // Tape 2 : déclencher.
+  await page.getByTestId('shutter').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`))
+
+  // Tape 3 : valider le calage. On synchronise sur la navigation qui suit
+  // l écriture réussie, jamais sur un délai : c est le seul point fiable.
+  await page.getByTestId('align-confirm').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(2)
+})
+
 test('crée un point de vue depuis la première photo', async ({ page }) => {
   await page.getByRole('button', { name: "J'ai compris" }).click()
   await page.getByTestId('new-viewpoint').click()
@@ -162,6 +188,75 @@ test('le fantôme montre la dernière photo, pas la première', async ({ page })
 
   await page.getByTestId('opacity-slider').fill('0.8')
   await expect(ghost).toHaveCSS('opacity', '0.8')
+})
+
+/**
+ * Reproduit l algorithme CSS `object-fit` pour localiser, en coordonnées de page, le
+ * rectangle où un élément dessine réellement son contenu.
+ *
+ * `getBoundingClientRect` ne suffit pas ici : la vidéo et le fantôme sont chacun
+ * étirés en `w-full h-full` de leur conteneur, donc leur boîte de mise en page est
+ * strictement identique que le bug soit présent ou non — `object-fit` ne redimensionne
+ * jamais la boîte de l élément, seulement ce qui est peint à l intérieur. Une
+ * comparaison de boîtes est donc une tautologie qui ne peut jamais échouer ; c est le
+ * rectangle réellement peint, calculé ici, qui porte la propriété à vérifier.
+ */
+function contentRect(
+  fit: string,
+  box: { x: number; y: number; width: number; height: number },
+  natural: { width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  // `cover` et `fill` peignent toujours la boîte entière (le premier recadre
+  // l excédent, le second étire sans respecter le rapport) : seul `contain` peut
+  // laisser des marges, quand le rapport naturel diffère de celui de la boîte.
+  if (fit !== 'contain' || natural.width <= 0 || natural.height <= 0) return box
+  const scale = Math.min(box.width / natural.width, box.height / natural.height)
+  const width = natural.width * scale
+  const height = natural.height * scale
+  return { x: box.x + (box.width - width) / 2, y: box.y + (box.height - height) / 2, width, height }
+}
+
+test('le fantôme et le flux caméra montrent le même recadrage, pas seulement la même boîte', async ({
+  page,
+}) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/capture`)
+  await expect(page.getByTestId('ghost')).toBeVisible()
+
+  // Attendre les métadonnées de la vidéo : tant qu elle n a pas de dimensions
+  // intrinsèques, `object-fit` n a rien à letterboxer, ce qui masquerait la
+  // régression qu on veut détecter.
+  await expect
+    .poll(() => page.locator('video').evaluate((el: HTMLVideoElement) => el.videoWidth))
+    .toBeGreaterThan(0)
+
+  const ghostEl = page.getByTestId('ghost')
+  const videoEl = page.locator('video')
+
+  const ghostBox = (await ghostEl.boundingBox())!
+  const videoBox = (await videoEl.boundingBox())!
+  const ghostNatural = await ghostEl.evaluate((el: HTMLCanvasElement) => ({
+    width: el.width,
+    height: el.height,
+  }))
+  const videoNatural = await videoEl.evaluate((el: HTMLVideoElement) => ({
+    width: el.videoWidth,
+    height: el.videoHeight,
+  }))
+  const ghostFit = await ghostEl.evaluate((el) => getComputedStyle(el).objectFit)
+  const videoFit = await videoEl.evaluate((el) => getComputedStyle(el).objectFit)
+
+  // Le cadre canonique du fixture est en 300x400 (rapport 0,75) alors que la caméra
+  // synthétique renvoie du 1920x1080 (rapport ~1,78) : les deux rapports diffèrent,
+  // donc c est précisément le cas où un letterboxing indépendant désalignerait les
+  // deux calques.
+  const ghostContent = contentRect(ghostFit, ghostBox, ghostNatural)
+  const videoContent = contentRect(videoFit, videoBox, videoNatural)
+
+  expect(Math.abs(ghostContent.x - videoContent.x)).toBeLessThan(2)
+  expect(Math.abs(ghostContent.y - videoContent.y)).toBeLessThan(2)
+  expect(Math.abs(ghostContent.width - videoContent.width)).toBeLessThan(2)
+  expect(Math.abs(ghostContent.height - videoContent.height)).toBeLessThan(2)
 })
 
 test("la reprise sur un identifiant inexistant n'écrit rien en base", async ({ page }) => {

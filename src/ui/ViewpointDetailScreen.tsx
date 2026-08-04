@@ -72,15 +72,23 @@ function ShotRow({
 export function ViewpointDetailScreen() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { shots, loading, reload } = useShots(id)
+  const { shots, loading, error: shotsError, reload } = useShots(id)
 
   const [viewpoint, setViewpoint] = useState<Viewpoint | null>(null)
+  const [viewpointError, setViewpointError] = useState(false)
   useEffect(() => {
     if (!id) return
-    getViewpoint(id).then((found) => {
-      if (!found) navigate('/', { replace: true })
-      else setViewpoint(found)
-    })
+    setViewpointError(false)
+    getViewpoint(id)
+      .then((found) => {
+        if (!found) navigate('/', { replace: true })
+        else setViewpoint(found)
+      })
+      .catch(() => {
+        // Sans ce filet, un rejet laisserait `viewpoint` à `null` pour toujours : le
+        // titre resterait vide et l écran entier n afficherait plus rien d utile.
+        setViewpointError(true)
+      })
   }, [id, navigate])
 
   const [before, setBefore] = useState<string | null>(null)
@@ -156,7 +164,16 @@ export function ViewpointDetailScreen() {
         </button>
       }
     >
-      {!loading && shots.length === 0 && (
+      {(viewpointError || shotsError) && (
+        <p
+          data-testid="detail-load-error"
+          className="px-6 py-10 text-center text-sm text-slate-300"
+        >
+          Impossible de charger ce point de vue.
+        </p>
+      )}
+
+      {!loading && !shotsError && shots.length === 0 && (
         <p className="px-6 py-10 text-center text-sm text-slate-300">
           Aucune photo dans ce point de vue. Reprenez-en une pour redémarrer la série.
         </p>

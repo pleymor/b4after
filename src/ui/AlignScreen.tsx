@@ -26,8 +26,8 @@ export function AlignScreen() {
 
   const { shots } = useShots(id)
   const reference = shots.at(-1)
-  const referenceBitmap = useBitmap(reference?.blob)
-  const capturedBitmap = useBitmap(pending?.captured.blob)
+  const { bitmap: referenceBitmap } = useBitmap(reference?.blob)
+  const { bitmap: capturedBitmap } = useBitmap(pending?.captured.blob)
 
   // `pending` est mémoïsé une fois pour toutes : ces deux objets doivent l être aussi,
   // sinon l effet qui recrée l état de geste se rejouerait à chaque rendu et

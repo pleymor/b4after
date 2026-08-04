@@ -16,6 +16,7 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'found'; viewpoint: Viewpoint }
   | { status: 'not-found' }
+  | { status: 'error' }
 
 /**
  * Reprise d un point de vue existant. `viewpointId` arrive en prop, jamais
@@ -33,10 +34,17 @@ export function RetakeCaptureScreen({ viewpointId }: { viewpointId: string }) {
   useEffect(() => {
     let active = true
     setState({ status: 'loading' })
-    getViewpoint(viewpointId).then((found) => {
-      if (!active) return
-      setState(found ? { status: 'found', viewpoint: found } : { status: 'not-found' })
-    })
+    getViewpoint(viewpointId)
+      .then((found) => {
+        if (!active) return
+        setState(found ? { status: 'found', viewpoint: found } : { status: 'not-found' })
+      })
+      .catch(() => {
+        // Sans ce filet, un rejet laisserait l écran bloqué sur « Chargement… » pour
+        // toujours, sans jamais dire à l utilisateur ce qui ne va pas.
+        if (!active) return
+        setState({ status: 'error' })
+      })
     return () => {
       active = false
     }
@@ -59,6 +67,29 @@ export function RetakeCaptureScreen({ viewpointId }: { viewpointId: string }) {
             className="mt-6 inline-block rounded-xl bg-sky-500 px-6 py-3 font-semibold text-slate-950"
           >
             Retour à l'accueil
+          </Link>
+        </div>
+      </Screen>
+    )
+  }
+
+  if (state.status === 'error') {
+    return (
+      <Screen
+        title="Reprise"
+        back={
+          <Link to={`/v/${viewpointId}`} className="text-sm text-slate-300">
+            Annuler
+          </Link>
+        }
+      >
+        <div className="px-6 py-12 text-center text-slate-300">
+          <p className="text-lg font-medium">Impossible de charger ce point de vue.</p>
+          <Link
+            to={`/v/${viewpointId}`}
+            className="mt-6 inline-block rounded-xl bg-sky-500 px-6 py-3 font-semibold text-slate-950"
+          >
+            Retour
           </Link>
         </div>
       </Screen>
@@ -107,7 +138,7 @@ function RetakeCapture({
 
   const { shots } = useShots(viewpointId)
   const reference: Shot | undefined = shots.at(-1)
-  const referenceBitmap = useBitmap(reference?.blob)
+  const { bitmap: referenceBitmap } = useBitmap(reference?.blob)
 
   const { videoRef, status, retry, capture } = useCamera({
     aspectRatio: frame.width / frame.height,
@@ -158,27 +189,39 @@ function RetakeCapture({
       {status === 'denied' || status === 'unavailable' ? (
         <CameraDeniedNotice status={status} onRetry={retry} />
       ) : (
-        <div className="relative h-full">
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            autoPlay
-            className="h-full w-full bg-black object-contain"
-          />
+        <div className="relative flex h-full items-center justify-center overflow-hidden">
+          {/* Le flux et le fantôme doivent occuper exactement la même boîte, au rapport
+              d aspect du cadre canonique. Sinon le flux se letterboxe au rapport du
+              capteur et le fantôme à celui du cadre : les deux calques n ont plus ni la
+              même échelle ni le même centre, et l aide au cadrage induit en erreur.
+              `object-cover` sur la vidéo montre précisément le recadrage que le cadre
+              canonique appliquera à la prise. La hauteur est définie et la largeur
+              dérivée du rapport, pour que la boîte le respecte exactement. */}
+          <div
+            className="relative h-full w-auto shrink-0"
+            style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
+          >
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className="absolute inset-0 h-full w-full bg-black object-cover"
+            />
 
-          <ShotCanvas
-            data-testid="ghost"
-            source={referenceBitmap}
-            transform={reference?.transform ?? { scale: 1, rotation: 0, tx: 0, ty: 0 }}
-            frame={frame}
-            shot={{
-              width: reference?.width ?? frame.width,
-              height: reference?.height ?? frame.height,
-            }}
-            className="pointer-events-none absolute inset-0 h-full w-full object-contain"
-            style={{ opacity: ghostOpacity }}
-          />
+            <ShotCanvas
+              data-testid="ghost"
+              source={referenceBitmap}
+              transform={reference?.transform ?? { scale: 1, rotation: 0, tx: 0, ty: 0 }}
+              frame={frame}
+              shot={{
+                width: reference?.width ?? frame.width,
+                height: reference?.height ?? frame.height,
+              }}
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              style={{ opacity: ghostOpacity }}
+            />
+          </div>
 
           {rotationHint && (
             <p
