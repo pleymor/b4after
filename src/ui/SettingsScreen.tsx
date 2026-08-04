@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
-import { ensurePersistence, formatBytes, getStorageEstimate, isPersisted } from '@/db/storage'
+import { formatBytes, getStorageEstimate, isPersisted, requestPersistence } from '@/db/storage'
 import { Screen } from './components/Screen'
 
 export function SettingsScreen() {
@@ -44,7 +44,7 @@ export function SettingsScreen() {
             <button
               type="button"
               data-testid="request-persistence"
-              onClick={() => ensurePersistence().then(refresh)}
+              onClick={() => requestPersistence().then(refresh)}
               className="rounded-xl border border-slate-600 px-4 py-2"
             >
               Demander la persistance

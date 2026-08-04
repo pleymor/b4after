@@ -7,16 +7,31 @@ let persistenceRequest: Promise<boolean> | null = null
  */
 export function ensurePersistence(): Promise<boolean> {
   persistenceRequest ??= (async () => {
-    if (typeof navigator === 'undefined' || !navigator.storage?.persist || !navigator.storage?.persisted)
-      return false
-    try {
-      if (await navigator.storage.persisted()) return true
-      return await navigator.storage.persist()
-    } catch {
-      return false
-    }
+    if (await isPersisted()) return true
+    return requestPersistence()
   })()
   return persistenceRequest
+}
+
+/**
+ * Demande explicite, **non mémoïsée** : c est le bouton des réglages.
+ *
+ * `ensurePersistence` ne peut pas servir ici. Elle est mémoïsée, et les deux chemins
+ * d écriture l appellent bien avant que l utilisateur atteigne les réglages : elle
+ * rendrait donc une promesse déjà résolue et n interrogerait jamais le navigateur une
+ * seconde fois. Le bouton serait un no-op.
+ */
+export async function requestPersistence(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.storage?.persist) return false
+  try {
+    const granted = await navigator.storage.persist()
+    // Aligner le résultat mémoïsé sur la réalité, pour que le chemin d écriture ne
+    // redemande pas inutilement après un accord obtenu ici.
+    if (granted) persistenceRequest = Promise.resolve(true)
+    return granted
+  } catch {
+    return false
+  }
 }
 
 /** Réservé aux tests, qui rejouent la première demande. */
@@ -25,7 +40,7 @@ export function resetPersistenceForTests(): void {
 }
 
 export async function isPersisted(): Promise<boolean> {
-  if (!navigator.storage?.persisted) return false
+  if (typeof navigator === 'undefined' || !navigator.storage?.persisted) return false
   try {
     return await navigator.storage.persisted()
   } catch {
@@ -34,7 +49,7 @@ export async function isPersisted(): Promise<boolean> {
 }
 
 export async function getStorageEstimate(): Promise<{ usage: number; quota: number } | null> {
-  if (!navigator.storage?.estimate) return null
+  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return null
   try {
     const estimate = await navigator.storage.estimate()
     return { usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 }

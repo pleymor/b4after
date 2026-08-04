@@ -1,9 +1,11 @@
 import 'fake-indexeddb/auto'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IDENTITY } from '@/align/transform'
 import { DB_NAME, resetDbForTests } from './schema'
+import { resetPersistenceForTests } from './storage'
 import {
   createViewpoint,
+  createViewpointWithFirstShot,
   deleteViewpoint,
   getViewpoint,
   listViewpoints,
@@ -122,6 +124,29 @@ describe('viewpoints', () => {
     await seedShot(recent.id)
 
     expect((await listViewpoints()).map((v) => v.name)).toEqual(['Récent', 'Ancien', 'Vide'])
+  })
+})
+
+describe('demande de persistance', () => {
+  it('est demandée par la création avec première photo, et pas seulement par addShot', async () => {
+    // Sans ce test, retirer ensurePersistence de createViewpointWithFirstShot
+    // passerait inaperçu : la toute première photo de l app passe par là, jamais par
+    // addShot, et l appel n a aucun effet observable ailleurs.
+    const persist = vi.fn().mockResolvedValue(true)
+    vi.stubGlobal('navigator', { storage: { persist, persisted: async () => false } })
+    resetPersistenceForTests()
+
+    await createViewpointWithFirstShot({
+      name: 'Référence',
+      width: 400,
+      height: 600,
+      blob: jpeg('pixels'),
+      thumbBlob: jpeg('t'),
+    })
+
+    expect(persist).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+    resetPersistenceForTests()
   })
 })
 
