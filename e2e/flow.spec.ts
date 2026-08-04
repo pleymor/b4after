@@ -430,3 +430,38 @@ test('affiche l état du stockage dans les réglages', async ({ page }) => {
   await expect(page.getByTestId('persistence-state')).toBeVisible()
   await expect(page.getByTestId('app-version')).toBeVisible()
 })
+
+test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+
+  // Photo de référence.
+  await page.getByTestId('new-viewpoint').click()
+  await page.getByTestId('shutter').click()
+  await page.getByTestId('name-input').fill('Salle de bain')
+  await page.getByTestId('name-confirm').click()
+  // Point de synchronisation : la navigation vers l accueil, puis l affichage de
+  // l élément, n a lieu qu après l écriture réussie de `createViewpointWithFirstShot`.
+  // `toContainText` réessaie jusqu à ce que ce soit le cas.
+  await expect(page.getByTestId('viewpoint-item')).toContainText('Salle de bain')
+
+  // Reprise avec fantôme, puis calage.
+  await page.getByTestId('viewpoint-item').click()
+  await page.getByTestId('retake-shot').click()
+  await expect(page.getByTestId('ghost')).toBeVisible()
+  await page.getByTestId('shutter').click()
+  await page.getByTestId('swap-layers').click()
+  await page.getByTestId('align-confirm').click()
+  // Point de synchronisation : `align-confirm` ne navigue vers la série qu après
+  // l écriture réussie de la seconde photo. `toHaveCount` réessaie jusqu à ce que la
+  // navigation ait eu lieu et que la photo apparaisse ; sans elle, ce test lirait la
+  // série avant que l écriture n y soit reflétée et ne passerait que par chance.
+  await expect(page.getByTestId('shot-item')).toHaveCount(2)
+
+  // Comparaison et export.
+  await page.getByTestId('compare').click()
+  await expect(page.getByTestId('reveal-slider')).toBeVisible()
+
+  const download = page.waitForEvent('download')
+  await page.getByTestId('export-jpeg').click()
+  expect((await download).suggestedFilename()).toContain('salle-de-bain')
+})
