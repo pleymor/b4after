@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { getShot } from '@/db/shots'
 import { getViewpoint } from '@/db/viewpoints'
@@ -36,6 +36,12 @@ export function CompareScreen() {
   const [status, setStatus] = useState<string | null>('Chargement…')
   const [showDates, setShowDates] = useState(true)
   const [progress, setProgress] = useState<number | null>(null)
+  const [busy, setBusy] = useState<null | 'jpeg' | 'gif'>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Annuler l encodage si l utilisateur quitte l écran : sans ça le worker
+  // continuerait de tourner pour un fichier que plus personne n attend.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   useEffect(() => {
     if (!id) return
@@ -54,7 +60,7 @@ export function CompareScreen() {
       setViewpoint(foundViewpoint)
       setPair({ before, after })
       setStatus(null)
-    })
+    }).catch(() => setStatus('Impossible de lire cette comparaison.'))
   }, [id, params])
 
   const beforeBitmap = useBitmap(pair?.before.blob)
@@ -63,6 +69,10 @@ export function CompareScreen() {
   const frame: Size | null = viewpoint
     ? { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
     : null
+
+  // Les boutons d export restent inertes tant que les deux photos ne sont pas
+  // décodées : les activer plus tôt donnerait une tape sans effet ni message.
+  const ready = Boolean(pair && frame && beforeBitmap && afterBitmap)
 
   function inputsFor(): { before: ComparisonInput; after: ComparisonInput } | null {
     if (!pair || !beforeBitmap || !afterBitmap) return null
@@ -84,34 +94,49 @@ export function CompareScreen() {
 
   async function exportJpeg() {
     const inputs = inputsFor()
-    if (!inputs || !frame || !viewpoint || !pair) return
-    setStatus('Génération de l image…')
+    // `busy` verrouille les deux boutons : sans lui, une double tape ou une tape sur
+    // l autre export lancerait un second travail concurrent, donc deux partages.
+    if (!inputs || !frame || !viewpoint || !pair || busy) return
+    setBusy('jpeg')
+    setStatus("Génération de l'image…")
     try {
       const blob = await renderSideBySide(inputs.before, inputs.after, frame, { showDates })
       const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.jpg`
       const outcome = await shareOrDownload(new File([blob], name, { type: 'image/jpeg' }))
       setStatus(outcome === 'downloaded' ? 'Image téléchargée.' : null)
     } catch {
-      setStatus("La génération de l image a échoué.")
+      setStatus("La génération de l'image a échoué.")
+    } finally {
+      setBusy(null)
     }
   }
 
   async function exportGif() {
     const inputs = inputsFor()
-    if (!inputs || !frame || !viewpoint || !pair) return
+    if (!inputs || !frame || !viewpoint || !pair || busy) return
+    const controller = new AbortController()
+    abortRef.current = controller
+    setBusy('gif')
     setStatus(null)
     setProgress(0)
     try {
       const blob = await renderCrossfadeGif(inputs.before, inputs.after, frame, {
         onProgress: (done, total) => setProgress(done / total),
+        signal: controller.signal,
       })
       const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.gif`
       const outcome = await shareOrDownload(new File([blob], name, { type: 'image/gif' }))
       setStatus(outcome === 'downloaded' ? 'GIF téléchargé.' : null)
-    } catch {
-      setStatus("La génération du GIF a échoué.")
+    } catch (caught) {
+      setStatus(
+        caught instanceof DOMException && caught.name === 'AbortError'
+          ? 'Export annulé.'
+          : 'La génération du GIF a échoué.',
+      )
     } finally {
+      abortRef.current = null
       setProgress(null)
+      setBusy(null)
     }
   }
 
@@ -161,13 +186,17 @@ export function CompareScreen() {
                 checked={showDates}
                 onChange={(event) => setShowDates(event.target.checked)}
               />
-              Afficher les dates sur l export
+              Afficher les dates sur l'image côte-à-côte
             </label>
+
+            {!ready && (
+              <p className="text-center text-sm text-slate-400">Préparation des photos…</p>
+            )}
 
             <button
               type="button"
               data-testid="export-jpeg"
-              disabled={progress !== null}
+              disabled={!ready || busy !== null}
               onClick={exportJpeg}
               className="w-full rounded-xl bg-sky-500 py-4 font-semibold text-slate-950 disabled:opacity-40"
             >
@@ -176,7 +205,7 @@ export function CompareScreen() {
             <button
               type="button"
               data-testid="export-gif"
-              disabled={progress !== null}
+              disabled={!ready || busy !== null}
               onClick={exportGif}
               className="w-full rounded-xl border border-slate-600 py-4 disabled:opacity-40"
             >
@@ -194,6 +223,14 @@ export function CompareScreen() {
                 <p className="text-center text-xs text-slate-400">
                   Encodage du GIF… {Math.round(progress * 100)} %
                 </p>
+                <button
+                  type="button"
+                  data-testid="cancel-export"
+                  onClick={() => abortRef.current?.abort()}
+                  className="w-full py-2 text-sm text-slate-300 underline"
+                >
+                  Annuler l'export
+                </button>
               </div>
             )}
           </>
