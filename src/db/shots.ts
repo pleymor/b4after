@@ -1,5 +1,6 @@
 import type { Shot, Transform } from '@/types'
 import { newId, openDb } from './schema'
+import { ensurePersistence } from './storage'
 
 export async function addShot(input: {
   viewpointId: string
@@ -9,6 +10,8 @@ export async function addShot(input: {
   height: number
   transform: Transform
 }): Promise<Shot> {
+  // Au premier enregistrement seulement : l appel est mémoïsé et n échoue jamais.
+  await ensurePersistence()
   const shot: Shot = { id: newId(), takenAt: Date.now(), ...input }
   const db = await openDb()
   await db.put('shots', shot)

@@ -235,6 +235,10 @@ test('remettre à zéro annule le calage en cours', async ({ page }) => {
 
   await page.getByTestId('align-reset').click()
   await page.getByTestId('align-confirm').click()
+  // Attendre la navigation avant de lire la base : elle n a lieu qu après une
+  // écriture réussie, et c est le seul point de synchronisation fiable. Sans elle
+  // le test lit la série avant que la photo y soit, et ne passe que par chance.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
 
   const shots = await page.evaluate(async (id) => {
     const { listShots } = await import('/src/db/shots.ts')
@@ -416,4 +420,13 @@ test('signale une comparaison introuvable', async ({ page }) => {
   const { viewpointId } = await seed(page, 'Façade nord')
   await page.goto(`/v/${viewpointId}/compare?before=inconnu&after=inconnu`)
   await expect(page.getByTestId('export-status')).toContainText('introuvable')
+})
+
+test('affiche l état du stockage dans les réglages', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByRole('link', { name: 'Réglages' }).click()
+
+  await expect(page.getByTestId('storage-usage')).toContainText(/o|ko|Mo|Go/)
+  await expect(page.getByTestId('persistence-state')).toBeVisible()
+  await expect(page.getByTestId('app-version')).toBeVisible()
 })

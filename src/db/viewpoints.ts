@@ -1,6 +1,7 @@
 import { IDENTITY } from '@/align/transform'
 import type { Shot, Viewpoint, ViewpointSummary } from '@/types'
 import { newId, openDb } from './schema'
+import { ensurePersistence } from './storage'
 
 export async function createViewpoint(input: {
   name: string
@@ -89,6 +90,8 @@ export async function createViewpointWithFirstShot(input: {
   blob: Blob
   thumbBlob: Blob
 }): Promise<{ viewpoint: Viewpoint; shot: Shot }> {
+  // La toute première photo de l app passe par ici et non par `addShot`.
+  await ensurePersistence()
   const now = Date.now()
   const viewpoint: Viewpoint = {
     id: newId(),

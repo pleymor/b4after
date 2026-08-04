@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useCamera, type CapturedFrame } from '@/camera/useCamera'
+import { isQuotaError } from '@/db/storage'
 import { createViewpointWithFirstShot, nextViewpointName } from '@/db/viewpoints'
 import { CameraDeniedNotice } from './components/CameraDeniedNotice'
 import { Screen } from './components/Screen'
@@ -43,9 +44,12 @@ export function FirstCaptureScreen() {
         thumbBlob: captured.thumbBlob,
       })
       navigate('/', { replace: true })
-    } catch {
-      // La photo reste en mémoire : l utilisateur peut réessayer sans la reprendre.
-      setError("L'enregistrement a échoué. L'espace de stockage est peut-être plein.")
+    } catch (caught) {
+      setError(
+        isQuotaError(caught)
+          ? "L'espace de stockage est plein. Supprimez d'anciennes photos, puis réessayez — celle-ci n'est pas perdue."
+          : "L'enregistrement a échoué. Réessayez.",
+      )
       setBusy(false)
     }
   }

@@ -5,6 +5,7 @@ import { toFrameCoords } from '@/align/surface'
 import { IDENTITY, clampToCover } from '@/align/transform'
 import { peekPendingShot, takePendingShot } from '@/capture/pendingShot'
 import { addShot } from '@/db/shots'
+import { isQuotaError } from '@/db/storage'
 import { useBitmap } from '@/hooks/useBitmap'
 import { useShots } from '@/hooks/useShots'
 import type { Size, Transform } from '@/types'
@@ -93,10 +94,14 @@ export function AlignScreen() {
       // silencieux, et la photo serait définitivement perdue.
       takePendingShot()
       navigate(`/v/${id}`, { replace: true })
-    } catch {
+    } catch (caught) {
       // La photo reste en attente : un nouvel essai est possible sans reprendre.
       writingRef.current = false
-      setError("L'enregistrement a échoué. L'espace de stockage est peut-être plein.")
+      setError(
+        isQuotaError(caught)
+          ? "L'espace de stockage est plein. Supprimez d'anciennes photos, puis réessayez — celle-ci n'est pas perdue."
+          : "L'enregistrement a échoué. Réessayez.",
+      )
       setBusy(false)
     }
   }

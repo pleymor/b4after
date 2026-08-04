@@ -28,5 +28,6 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  define: { __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0') },
   test: { environment: 'node', globals: true, include: ['src/**/*.test.ts'] },
 })
