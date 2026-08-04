@@ -499,7 +499,27 @@ test('exporte une image côte-à-côte', async ({ page }) => {
   expect(file.suggestedFilename()).toMatch(/^b4after-facade-nord-\d{4}-\d{2}-\d{2}\.jpg$/)
 })
 
-test('exporte un GIF animé avec une progression', async ({ page }) => {
+test('exporte une vidéo animée avec une progression', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  const download = page.waitForEvent('download')
+  await page.getByTestId('export-gif').click()
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+  const file = await download
+
+  // Ce Chromium prend en charge l enregistrement MP4 (voir video.ts) : l export
+  // animé choisit donc ce format plutôt que son repli GIF.
+  expect(file.suggestedFilename()).toMatch(/\.mp4$/)
+})
+
+test('replie sur le GIF quand aucun format vidéo n est pris en charge', async ({ page }) => {
+  await page.addInitScript(() => {
+    // Simule un navigateur incapable d enregistrer du MP4 : c est le seul moyen
+    // d exercer la branche de repli, tous les environnements de test le supportant.
+    MediaRecorder.isTypeSupported = () => false
+  })
+
   const { viewpointId, before, after } = await seedPair(page)
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
 

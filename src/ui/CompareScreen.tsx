@@ -6,6 +6,7 @@ import { useBitmap } from '@/hooks/useBitmap'
 import { formatDate } from '@/lib/format'
 import { renderCrossfadeGif } from '@/render/gif'
 import { renderSideBySide, type ComparisonInput } from '@/render/sideBySide'
+import { renderCrossfadeVideo, supportedVideoMime } from '@/render/video'
 import { shareOrDownload } from '@/share/shareOrDownload'
 import type { Shot, Size, Viewpoint } from '@/types'
 import { RevealSlider } from './components/RevealSlider'
@@ -36,7 +37,7 @@ export function CompareScreen() {
   const [status, setStatus] = useState<string | null>('Chargement…')
   const [showDates, setShowDates] = useState(true)
   const [progress, setProgress] = useState<number | null>(null)
-  const [busy, setBusy] = useState<null | 'jpeg' | 'gif'>(null)
+  const [busy, setBusy] = useState<null | 'jpeg' | 'anim'>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   // Annuler l encodage si l utilisateur quitte l écran : sans ça le worker
@@ -112,27 +113,36 @@ export function CompareScreen() {
     }
   }
 
-  async function exportGif() {
+  async function exportAnimation() {
     const inputs = inputsFor()
     if (!inputs || !frame || !viewpoint || !pair || busy) return
     const controller = new AbortController()
     abortRef.current = controller
-    setBusy('gif')
+    // Choisi une seule fois par export : MediaRecorder ne change pas de format en
+    // cours de route, et refaire l appel à mi-parcours ne servirait à rien.
+    const mime = supportedVideoMime()
+    setBusy('anim')
     setStatus(null)
     setProgress(0)
     try {
-      const blob = await renderCrossfadeGif(inputs.before, inputs.after, frame, {
-        onProgress: (done, total) => setProgress(done / total),
-        signal: controller.signal,
-      })
-      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.gif`
-      const outcome = await shareOrDownload(new File([blob], name, { type: 'image/gif' }))
-      setStatus(outcome === 'downloaded' ? 'GIF téléchargé.' : null)
+      const blob = mime
+        ? await renderCrossfadeVideo(inputs.before, inputs.after, frame, {
+            onProgress: (done, total) => setProgress(done / total),
+            signal: controller.signal,
+          })
+        : await renderCrossfadeGif(inputs.before, inputs.after, frame, {
+            onProgress: (done, total) => setProgress(done / total),
+            signal: controller.signal,
+          })
+      const ext = mime ? 'mp4' : 'gif'
+      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.${ext}`
+      const outcome = await shareOrDownload(new File([blob], name, { type: mime ?? 'image/gif' }))
+      setStatus(outcome === 'downloaded' ? 'Export téléchargé.' : null)
     } catch (caught) {
       setStatus(
         caught instanceof DOMException && caught.name === 'AbortError'
           ? 'Export annulé.'
-          : 'La génération du GIF a échoué.',
+          : "La génération de l'export animé a échoué.",
       )
     } finally {
       abortRef.current = null
@@ -207,14 +217,18 @@ export function CompareScreen() {
             >
               Image côte-à-côte
             </button>
+            {/* data-testid historique : il datait de l export GIF que celui-ci
+                remplace en priorité (avec repli sur GIF si la vidéo n est pas
+                prise en charge). Le renommer serait un remue-ménage pour rien,
+                les tests existants le ciblent déjà. */}
             <button
               type="button"
               data-testid="export-gif"
               disabled={!ready || busy !== null}
-              onClick={exportGif}
+              onClick={exportAnimation}
               className="w-full rounded-xl border border-slate-600 py-4 disabled:opacity-40"
             >
-              GIF animé
+              Vidéo animée
             </button>
 
             {progress !== null && (
@@ -226,7 +240,7 @@ export function CompareScreen() {
                   />
                 </div>
                 <p className="text-center text-xs text-slate-400">
-                  Encodage du GIF… {Math.round(progress * 100)} %
+                  Encodage de l'export animé… {Math.round(progress * 100)} %
                 </p>
                 <button
                   type="button"

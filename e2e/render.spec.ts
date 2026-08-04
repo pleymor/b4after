@@ -378,3 +378,139 @@ test('renderCrossfadeGif honore l annulation', async ({ page }) => {
 
   expect(message).toBe('AbortError')
 })
+
+test('renderCrossfadeVideo produit un MP4 non trivial', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    return { type: blob.type, size: blob.size, progress }
+  }, HELPERS)
+
+  expect(result.type.startsWith('video/mp4')).toBe(true)
+  // Un fichier trivial (quelques octets d en-tête vide) trahirait un flux jamais
+  // vraiment enregistré ; quelques ko pour ~3,4 s de vidéo 100x150 est le bon ordre
+  // de grandeur.
+  expect(result.size).toBeGreaterThan(1000)
+  expect(result.progress.length).toBeGreaterThan(0)
+  const [done, total] = result.progress.at(-1)
+  expect(done).toBe(total)
+})
+
+test("renderCrossfadeVideo réduit la largeur à 640 px sans jamais agrandir", async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 1200, height: 1600 }
+    const bitmap = window.__stripes(1200, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const blob = await renderCrossfadeVideo(input, input, frame)
+    const url = URL.createObjectURL(blob)
+    const video = document.createElement('video')
+    video.muted = true
+    video.src = url
+    const result = await new Promise((resolve, reject) => {
+      video.addEventListener(
+        'loadedmetadata',
+        () => resolve({ width: video.videoWidth, height: video.videoHeight }),
+        { once: true },
+      )
+      video.addEventListener('error', () => reject(video.error), { once: true })
+    })
+    URL.revokeObjectURL(url)
+    return result
+  }, HELPERS)
+
+  // Même facteur que le GIF pour le même cadre : 640/1200, cadre réduit à 640x853.
+  expect(size).toEqual({ width: 640, height: 853 })
+})
+
+test('renderCrossfadeVideo honore l annulation', async ({ page }) => {
+  const message = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const controller = new AbortController()
+    controller.abort()
+    try {
+      await renderCrossfadeVideo(input, input, frame, { signal: controller.signal })
+      return 'pas d erreur'
+    } catch (error) {
+      return error.name
+    }
+  }, HELPERS)
+
+  expect(message).toBe('AbortError')
+})
+
+test('renderCrossfadeVideo anime réellement : les frames ne sont pas identiques', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame)
+    const url = URL.createObjectURL(blob)
+    const video = document.createElement('video')
+    video.muted = true
+    video.src = url
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true })
+      video.addEventListener('error', () => reject(video.error), { once: true })
+    })
+
+    const sampleAt = async (time) => {
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true })
+        video.currentTime = time
+      })
+      const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight)
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(video, 0, 0)
+      return window.__pixel(ctx, Math.floor(video.videoWidth / 2), Math.floor(video.videoHeight / 2))
+    }
+
+    // Le premier palier ("avant" pur, tout au début) et un point pris près de la
+    // fin du premier fondu (à 1,05 s sur une fenêtre de fondu 0,5-1,14 s) : une
+    // vidéo réellement figée renverrait le même pixel aux deux instants.
+    const start = await sampleAt(0.05)
+    const end = await sampleAt(1.05)
+
+    URL.revokeObjectURL(url)
+    return { start, end }
+  }, HELPERS)
+
+  expect(result.start).not.toEqual(result.end)
+})
