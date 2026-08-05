@@ -492,6 +492,7 @@ test('exporte une image côte-à-côte', async ({ page }) => {
 
   await expect(page.getByTestId('reveal-slider')).toBeVisible()
 
+  await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-jpeg').click()
   const file = await download
@@ -503,6 +504,7 @@ test('exporte une vidéo animée avec une progression', async ({ page }) => {
   const { viewpointId, before, after } = await seedPair(page)
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
 
+  await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-gif').click()
   await expect(page.getByTestId('export-progress')).toBeVisible()
@@ -523,12 +525,35 @@ test('replie sur le GIF quand aucun format vidéo n est pris en charge', async (
   const { viewpointId, before, after } = await seedPair(page)
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
 
+  await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-gif').click()
   await expect(page.getByTestId('export-progress')).toBeVisible()
   const file = await download
 
   expect(file.suggestedFilename()).toMatch(/\.gif$/)
+})
+
+test('mémorise les réglages d export d une visite à l autre', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  const url = `/v/${viewpointId}/compare?before=${before}&after=${after}`
+  await page.goto(url)
+
+  await page.getByTestId('open-image-options').click()
+  await page.getByTestId('stamp-mode').getByRole('radio', { name: 'Date + heure' }).click()
+  await page.getByTestId('layout-mode').getByRole('radio', { name: 'Vertical' }).click()
+  await page.getByTestId('close-sheet').click()
+
+  // Rechargement complet : ce qui survit vient de localStorage, pas de l état React.
+  await page.goto(url)
+  await page.getByTestId('open-image-options').click()
+
+  await expect(
+    page.getByTestId('stamp-mode').getByRole('radio', { name: 'Date + heure' }),
+  ).toHaveAttribute('aria-checked', 'true')
+  await expect(
+    page.getByTestId('layout-mode').getByRole('radio', { name: 'Vertical' }),
+  ).toHaveAttribute('aria-checked', 'true')
 })
 
 test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
@@ -540,6 +565,11 @@ test('la comparaison ne défile pas sur un écran de téléphone', async ({ page
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
   const slider = page.getByTestId('reveal-slider')
   await expect(slider).toBeVisible()
+
+  // Le motif du problème d origine : les commandes d export sont atteignables sans
+  // le moindre geste de défilement.
+  await expect(page.getByTestId('open-image-options')).toBeInViewport()
+  await expect(page.getByTestId('open-video-options')).toBeInViewport()
 
   // L image se contente de la hauteur restante : il n y a rien à défiler.
   const overflow = await page.evaluate(() => {
@@ -618,6 +648,7 @@ test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({
   await page.getByTestId('compare').click()
   await expect(page.getByTestId('reveal-slider')).toBeVisible()
 
+  await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-jpeg').click()
   expect((await download).suggestedFilename()).toContain('salle-de-bain')
