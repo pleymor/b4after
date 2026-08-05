@@ -282,7 +282,7 @@ export function saveExportOptions(options: ExportOptions): void {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/lib/exportOptions.test.ts`
-Expected: PASS — 11 tests.
+Expected: PASS — 10 tests.
 
 - [ ] **Step 5: Commit**
 
