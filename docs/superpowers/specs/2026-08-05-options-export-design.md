@@ -274,6 +274,16 @@ En qualité maximale, `MediaRecorder` encode jusqu'à 2048 px de large. La captu
 temps réel, la durée d'encodage ne change pas, mais le fichier peut devenir lourd à
 partager. C'est le sens assumé du réglage, et le défaut reste 640 px.
 
+Cet argument ne se transporte pas au repli GIF : `renderCrossfadeGif` accumule en mémoire
+les frames RGBA brutes de chaque palier avant de les poster au worker de quantification,
+et ce coût-là *dépend* de la largeur — environ 83 Mo à 1920×1080 contre 10 Mo à 640 px pour
+un cadre 16:9, et la quantification tourne sur autant de pixels par frame. Le repli ne
+s'emprunte en outre que sur les navigateurs sans `MediaRecorder` MP4, donc précisément les
+appareils les plus faibles. Le chemin GIF plafonne donc sa largeur à 1080 px
+(`GIF_WIDTH_CAP` dans `gif.ts`) même quand `'full'` est demandé : un GIF moins large que la
+qualité maximale promise est un moindre mal face à un onglet qui meurt sur un téléphone
+d'entrée de gamme. La vidéo, chemin normal, continue d'honorer la pleine résolution.
+
 ## Hors périmètre
 
 - Exposer ces réglages dans l'écran Réglages. Ils se décident au moment d'exporter, sous
