@@ -1,4 +1,4 @@
-import type { Transition, VideoWidth } from '@/lib/exportOptions'
+import type { Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
 import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
 import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
@@ -9,12 +9,6 @@ import type { ComparisonInput } from './sideBySide'
 export const VIDEO_MAX_WIDTH = GIF_MAX_WIDTH
 
 const VIDEO_MIME_CANDIDATES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
-
-// Nombre de fondus enchaînés joués à la suite. Un seul aller (avant → après) ne
-// dure que le temps d une prise + un fondu, soit environ 1,1 s : assez court pour
-// qu une seule lecture ressemble à un instantané figé plutôt qu à une animation.
-// En jouer trois, en va-et-vient, porte la durée totale à environ 3,4 s.
-const REPS = 3
 
 function abortError(): DOMException {
   return new DOMException('Export annulé', 'AbortError')
@@ -49,8 +43,8 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
  * Fondu enchaîné en va-et-vient (avant → après → avant → …) dessiné en temps réel
  * sur un canevas détaché, capturé et encodé par `MediaRecorder`. Même rythme que
  * `renderCrossfadeGif` (paliers de 500 ms, pas de fondu de 80 ms) pour que les deux
- * exports se ressemblent, mais rejoué `REPS` fois pour qu une seule lecture se lise
- * déjà comme une animation plutôt qu un clignement.
+ * exports se ressemblent, mais rejoué le nombre de fois spécifié par `reps` pour qu une
+ * seule lecture se lise déjà comme une animation plutôt qu un clignement.
  */
 export async function renderCrossfadeVideo(
   before: ComparisonInput,
@@ -59,6 +53,7 @@ export async function renderCrossfadeVideo(
   options: {
     transition?: Transition
     width?: VideoWidth
+    reps?: VideoLength
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -77,6 +72,11 @@ export async function renderCrossfadeVideo(
   const to = scaleInput(after, widthFactor)
   const transition = options.transition ?? 'crossfade'
   const fadeSteps = transitionSteps(transition)
+
+  // Trois allers-retours par défaut, soit environ 3,4 s : un seul aller ne dure que
+  // le temps d'une prise plus un fondu (~1,1 s) et se lit comme un instantané figé
+  // plutôt que comme une animation.
+  const reps = options.reps ?? 3
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -101,7 +101,7 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  const total = REPS * (1 + fadeSteps)
+  const total = reps * (1 + fadeSteps)
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -135,7 +135,7 @@ export async function renderCrossfadeVideo(
     ;(async () => {
       let done = 0
       let mix = 0
-      for (let rep = 0; rep < REPS; rep += 1) {
+      for (let rep = 0; rep < reps; rep += 1) {
         const target = 1 - mix
 
         drawTransition(ctx, from, to, { width, height }, mix, transition)

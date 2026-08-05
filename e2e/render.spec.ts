@@ -763,3 +763,27 @@ test("renderCrossfadeGif n'agrandit jamais un cadre plus petit que la cible", as
   // fabrique pas du détail qui n existe pas.
   expect(size).toEqual({ width: 300, height: 400 })
 })
+
+test("renderCrossfadeVideo joue le nombre d'allers-retours demandé", async ({ page }) => {
+  const progress = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const seen = []
+    // `transition: 'cut'` pour que le test reste court : un palier par aller-retour,
+    // aucune frame de fondu. Ce qu'on mesure ici, c'est le nombre d'allers-retours.
+    await renderCrossfadeVideo(input, input, frame, {
+      reps: 1,
+      transition: 'cut',
+      onProgress: (done, total) => seen.push([done, total]),
+    })
+    return seen
+  }, HELPERS)
+
+  expect(progress.at(-1)).toEqual([1, 1])
+})
