@@ -215,7 +215,8 @@ Deux feuilles :
 
 La barre de progression et le bouton d'annulation vivent **dans** la feuille, où ils
 gardent leurs `data-testid` (`export-progress`, `cancel-export`) : le bouton qui a lancé
-l'export est là, celui qui l'annule doit y être aussi. La feuille se ferme au succès et le
+l'export est là, celui qui l'annule doit y être aussi. La feuille se ferme **dans tous les
+cas** une fois l'export terminé — succès, échec ou annulation — et le
 statut s'affiche dans la barre. Le verrou `busy` est inchangé.
 
 ## Flux de données
@@ -240,9 +241,19 @@ Le chemin vidéo est le même, `supportedVideoMime()` arbitrant entre
   `parseExportOptions`.
 - **`localStorage` en écriture impossible** (navigation privée) : le réglage s'applique à
   l'export en cours mais n'est pas mémorisé. Silencieux.
-- **Échec de rendu ou de partage** : comportement actuel inchangé, message dans la zone de
-  statut, qui est désormais toujours visible.
-- **Annulation** : inchangée, le message « Export annulé. » remonte dans la même zone.
+- **Échec de rendu ou de partage** : la feuille se ferme et le message s'affiche dans la
+  zone de statut de la barre, en couleur d'alerte. La fermeture est indispensable : le
+  panneau de la feuille est ancré au bas du viewport et recouvrirait entièrement cette
+  zone, donc un message rendu feuille ouverte serait invisible — et inaccessible aux
+  lecteurs d'écran, `aria-modal` aidant.
+- **Annulation** : la feuille se ferme aussi, et « Export annulé. » s'affiche dans la même
+  zone, en couleur neutre — l'utilisateur a obtenu ce qu'il demandait, ce n'est pas une
+  erreur.
+- **Fermeture pendant un encodage** : refusée tant qu'un export animé tourne. La
+  progression et le bouton d'annulation vivant dans la feuille, la laisser se fermer
+  priverait l'utilisateur des deux d'un coup, sans moyen de revenir — les icônes de la
+  barre étant elles-mêmes désactivées pendant ce temps. Le refus est porté par l'appelant,
+  pas par `Sheet`, qui reste ignorant de la notion d'export.
 
 ## Tests
 
