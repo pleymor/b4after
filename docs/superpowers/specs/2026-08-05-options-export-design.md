@@ -175,9 +175,19 @@ n'affiche que ce qui s'appliquera réellement sur ce navigateur.
 
 Corps :
 
-- Le conteneur de l'image devient `flex min-h-0 flex-1 items-center justify-center`, et sa
-  boîte `aspect-ratio` reçoit `max-h-full max-w-full`. L'image rétrécit pour tenir dans la
-  hauteur disponible au lieu de forcer un défilement.
+- Le conteneur de l'image devient `flex min-h-0 flex-1`, le `RevealSlider` prend
+  `h-full w-full`, et les deux `ShotCanvas` passent en `h-full w-full object-contain`.
+  L'image tient donc dans la hauteur disponible au lieu de forcer un défilement.
+
+  La boîte `aspect-ratio` disparaît. Une boîte `aspect-ratio` bornée à la fois en largeur
+  et en hauteur se déforme dès que l'une des deux bornes mord — le ratio n'est préservé
+  que si une seule dimension est définie. `object-contain` sur un canvas, élément
+  remplacé de ratio intrinsèque connu, ne peut structurellement pas déformer.
+
+  Le curseur de révélation reste juste : les deux canvas sont contenus à l'identique, la
+  couture tombe donc au même `x` dans les deux. Seule la poignée blanche court dans les
+  bandes noires du letterbox, ce que le `bg-black` déjà porté par le `RevealSlider` rend
+  volontaire.
 - La légende `date → date` reste dessous.
 - La case à cocher des dates disparaît : elle vit maintenant dans la feuille image.
 
@@ -248,7 +258,9 @@ End-to-end (`playwright`) :
 
 - `flow.spec.ts` — les quatre clics d'export existants gagnent une tape d'ouverture de
   feuille. Un test vérifie qu'un réglage modifié est retrouvé après rechargement de la
-  page.
+  page. Un autre garde le motif du problème d'origine : sur un écran de téléphone, les
+  deux boutons de la barre sont visibles **sans défiler**, et le conteneur défilant n'a
+  rien à défiler (`scrollHeight <= clientHeight + 1`).
 - `render.spec.ts` — les trois appels `renderSideBySide({ showDates })` passent à
   `{ stamp, layout }`. Nouveaux cas : `layout: 'vertical'` empile un cadre **portrait**
   (inverser la règle automatique est ce qui prouve que l'option est honorée) ;
