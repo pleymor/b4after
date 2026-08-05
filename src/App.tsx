@@ -5,10 +5,14 @@ import { CompareScreen } from './ui/CompareScreen'
 import { SettingsScreen } from './ui/SettingsScreen'
 import { ViewpointDetailScreen } from './ui/ViewpointDetailScreen'
 import { ViewpointListScreen } from './ui/ViewpointListScreen'
+import { CaptureFlash } from './ui/components/CaptureFlash'
 
 export default function App() {
   return (
     <BrowserRouter>
+      {/* Hors des routes : la prise de vue navigue vers le calage dès la tape, et le
+          flash doit survivre à cette navigation pour être vu. */}
+      <CaptureFlash />
       <Routes>
         <Route path="/" element={<ViewpointListScreen />} />
         <Route path="/capture" element={<CameraScreen />} />

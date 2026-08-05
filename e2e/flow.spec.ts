@@ -581,6 +581,142 @@ test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({
   expect((await download).suggestedFilename()).toContain('salle-de-bain')
 })
 
+/** Retard imposé à chaque encodage JPEG, largement au-delà du délai perceptible. */
+const ENCODE_DELAY_MS = 3000
+
+/**
+ * Ralentit tous les encodages JPEG de la page.
+ *
+ * C est ce qui rend la régression détectable : quand la prise de vue attendait son
+ * encodage, l aperçu ne pouvait pas apparaître avant ce délai. Sans ce ralentissement,
+ * un encodage rapide en environnement de test ferait passer les deux implémentations.
+ *
+ * À installer après les données de départ : `seed` encode aussi, et n a pas besoin
+ * d être lent.
+ */
+async function slowDownEncoding(page: import('@playwright/test').Page, delay: number) {
+  await page.addInitScript((ms) => {
+    const original = OffscreenCanvas.prototype.convertToBlob
+    OffscreenCanvas.prototype.convertToBlob = function convertToBlob(
+      ...args: Parameters<typeof original>
+    ) {
+      return new Promise((resolve, reject) => {
+        setTimeout(() => original.apply(this, args).then(resolve, reject), ms)
+      })
+    }
+  }, delay)
+}
+
+/** Attend que la vidéo ait des dimensions : sans elles, il n y a rien à saisir. */
+async function waitForStream(page: import('@playwright/test').Page) {
+  await expect(page.getByTestId('shutter')).toBeEnabled()
+  await expect
+    .poll(() => page.locator('video').evaluate((el: HTMLVideoElement) => el.videoWidth))
+    .toBeGreaterThan(0)
+}
+
+test('affiche la photo prise sans attendre son encodage', async ({ page }) => {
+  await slowDownEncoding(page, ENCODE_DELAY_MS)
+  await page.goto('/')
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+  await waitForStream(page)
+
+  const start = Date.now()
+  await page.getByTestId('shutter').click()
+
+  const preview = page.getByTestId('captured-preview')
+  await expect(preview).toBeVisible({ timeout: ENCODE_DELAY_MS / 2 })
+  // La borne est l assertion : l aperçu doit précéder l encodage, pas le suivre.
+  expect(Date.now() - start).toBeLessThan(ENCODE_DELAY_MS)
+
+  // Visible ne suffit pas : un canvas vide l est aussi. On vérifie qu il porte bien des
+  // pixels, sinon « afficher immédiatement » se réduirait à afficher un cadre noir.
+  const painted = await preview.evaluate((el: HTMLCanvasElement) => {
+    const ctx = el.getContext('2d')!
+    const { data } = ctx.getImageData(Math.floor(el.width / 2), Math.floor(el.height / 2), 1, 1)
+    return data[3] > 0 && data[0] + data[1] + data[2] > 0
+  })
+  expect(painted).toBe(true)
+})
+
+test('ouvre le calage sans attendre l encodage de la photo', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await slowDownEncoding(page, ENCODE_DELAY_MS)
+  await page.goto(`/v/${viewpointId}/capture`)
+  await waitForStream(page)
+
+  const start = Date.now()
+  await page.getByTestId('shutter').click()
+
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`), {
+    timeout: ENCODE_DELAY_MS / 2,
+  })
+  await expect(page.getByTestId('align-surface')).toBeVisible()
+  expect(Date.now() - start).toBeLessThan(ENCODE_DELAY_MS)
+})
+
+test("valider pendant l encodage nomme l étape en cours, puis enregistre", async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await slowDownEncoding(page, ENCODE_DELAY_MS)
+  await page.goto(`/v/${viewpointId}/capture`)
+  await waitForStream(page)
+
+  await page.getByTestId('shutter').click()
+  await page.getByTestId('align-confirm').click()
+
+  // Le bouton cède la place à l étape réelle plutôt que de se griser : un bouton grisé
+  // se lit comme une interface cassée.
+  await expect(page.getByTestId('busy-status')).toContainText('Encodage')
+  await expect(page.getByTestId('align-confirm')).toHaveCount(0)
+  // « Reprendre » consomme la photo en attente : le laisser atteignable pendant
+  // l attente de l encodage la ferait disparaître sous l écriture en cours.
+  await expect(page.getByTestId('align-retake')).toHaveCount(0)
+
+  // L attente est tenue jusqu au bout : la photo rejoint bien la série.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(2)
+})
+
+test('un flash accompagne la prise de vue', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+  await waitForStream(page)
+
+  // Observateur posé — et installé, le `await` en atteste — avant la tape : le flash ne
+  // dure que quelques centaines de millisecondes, le guetter après la tape serait une
+  // course perdue d avance et un test instable.
+  await page.evaluate(() => {
+    const element = document.querySelector('[data-testid="capture-flash"]')!
+    ;(window as unknown as { __flashed: Promise<boolean> }).__flashed = new Promise(
+      (resolve) => {
+        const observer = new MutationObserver(() => {
+          if (element.getAttribute('data-active') !== 'true') return
+          observer.disconnect()
+          resolve(true)
+        })
+        observer.observe(element, { attributes: true, attributeFilter: ['data-active'] })
+        setTimeout(() => {
+          observer.disconnect()
+          resolve(false)
+        }, 5000)
+      },
+    )
+  })
+
+  await page.getByTestId('shutter').click()
+
+  const flashed = await page.evaluate(
+    () => (window as unknown as { __flashed: Promise<boolean> }).__flashed,
+  )
+  expect(flashed).toBe(true)
+})
+
 test("déclencher coupe réellement le flux caméra, pas seulement son affichage", async ({
   page,
 }) => {
