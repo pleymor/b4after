@@ -17,6 +17,29 @@ export type ComparisonInput = {
 }
 
 /**
+ * Plus grande taille ≤ `startSize` pour laquelle `measure` rend une largeur qui tient
+ * dans `maxWidth`, avec un plancher à 6 px.
+ *
+ * Filet de sécurité : pour le format actuel, la taille naturelle tient toujours — la
+ * police et la limite sont toutes deux linéaires en largeur de cellule, leur rapport
+ * est donc invariant d échelle. Ce qui est couvert ici, c est une chaîne future plus
+ * longue ou une police plus large, pas le cas nominal.
+ */
+export function fittedFontSize(
+  measure: (size: number) => number,
+  maxWidth: number,
+  startSize: number,
+): number {
+  let size = startSize
+  // Plancher à 6 px : en dessous le texte est illisible de toute façon, et la boucle
+  // doit se terminer même sur un cadre absurdement étroit.
+  while (size > 6 && measure(size) > maxWidth) {
+    size -= 1
+  }
+  return size
+}
+
+/**
  * Réduit le corps de la police jusqu à ce que `text` tienne dans `maxWidth`, et pose
  * la police retenue sur le contexte.
  *
@@ -30,14 +53,15 @@ function setFittedFont(
   maxWidth: number,
   startSize: number,
 ): void {
-  let size = startSize
+  const size = fittedFontSize(
+    (candidate) => {
+      ctx.font = `${candidate}px sans-serif`
+      return ctx.measureText(text).width
+    },
+    maxWidth,
+    startSize,
+  )
   ctx.font = `${size}px sans-serif`
-  // Plancher à 6 px : en dessous le texte est illisible de toute façon, et la boucle
-  // doit se terminer même sur un cadre absurdement étroit.
-  while (size > 6 && ctx.measureText(text).width > maxWidth) {
-    size -= 1
-    ctx.font = `${size}px sans-serif`
-  }
 }
 
 export async function renderSideBySide(

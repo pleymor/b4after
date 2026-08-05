@@ -243,7 +243,9 @@ test('renderSideBySide accole un cadre paysage quand la disposition est forcée'
   expect(size).toEqual({ width: 308, height: 100 })
 })
 
-test('renderSideBySide écrit l heure sans déborder du bandeau', async ({ page }) => {
+test('renderSideBySide garde l heure dans sa cellule sans déborder sur les bords', async ({
+  page,
+}) => {
   const result = await page.evaluate(async (helpers) => {
     eval(helpers)
     const { renderSideBySide } = await import('/src/render/sideBySide.ts')
@@ -268,19 +270,25 @@ test('renderSideBySide écrit l heure sans déborder du bandeau', async ({ page 
     const ctx = canvas.getContext('2d')
     ctx.drawImage(decoded, 0, 0)
 
-    // Le bandeau est le sombre sous la première cellule ; le séparateur entre les
-    // deux cellules, lui, reste blanc. Un texte débordant y laisserait des pixels
-    // clairs : on échantillonne la colonne du séparateur sur la hauteur du bandeau.
-    const gutter = window.__pixel(ctx, 103, 150 + 7)
-    return { width: decoded.width, height: decoded.height, gutter }
+    // Le bandeau est sombre (#0f172a, [15,23,42]), le texte clair (#f1f5f9,
+    // [241,245,249]) : contrairement à blanc-contre-presque-blanc, ce contraste est
+    // franc. On échantillonne juste à l intérieur des deux bords de la cellule, au
+    // milieu de la hauteur du bandeau — un texte trop large y laisserait des pixels
+    // clairs.
+    const left = window.__pixel(ctx, 2, 150 + 7)
+    const right = window.__pixel(ctx, 97, 150 + 7)
+    return { width: decoded.width, height: decoded.height, left, right }
   }, HELPERS)
 
   // Bandeau = round(100 * 0.14) = 14 px, comme pour la date seule.
   expect(result).toMatchObject({ width: 208, height: 164 })
-  // Blanc franc : rien du texte n a franchi la cellule.
-  expect(result.gutter[0]).toBeGreaterThan(200)
-  expect(result.gutter[1]).toBeGreaterThan(200)
-  expect(result.gutter[2]).toBeGreaterThan(200)
+  // Sombre franc aux deux bords : le texte n a débordé ni à gauche ni à droite.
+  expect(result.left[0]).toBeLessThan(100)
+  expect(result.left[1]).toBeLessThan(100)
+  expect(result.left[2]).toBeLessThan(100)
+  expect(result.right[0]).toBeLessThan(100)
+  expect(result.right[1]).toBeLessThan(100)
+  expect(result.right[2]).toBeLessThan(100)
 })
 
 test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", async ({ page }) => {
