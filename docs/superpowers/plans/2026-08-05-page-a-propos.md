@@ -105,8 +105,12 @@ declare const __COMMIT_SHA__: string
 
 - [ ] **Step 4: Vérifier que les valeurs arrivent réellement dans le bundle**
 
-Run: `npm run build && grep -c "$(git rev-parse --short HEAD)" dist/assets/*.js`
-Expected: au moins `1`. La révision est bien substituée dans le code compilé.
+Run: `npm run build`
+Expected: succès. **Ne cherche pas encore la révision dans le bundle** : Vite ne
+substitue une constante `define` que là où l'identifiant est *référencé* dans les
+sources, et rien ne référence `__COMMIT_SHA__` avant la Task 3. La vérification que la
+valeur atterrit réellement dans le bundle compilé a donc lieu en Task 3, une fois la
+page qui l'affiche écrite.
 
 Puis vérifier le chemin de repli. `execSync` lève quand `git rev-parse` sort en erreur,
 et c'est ce que fait la commande hors d'un dépôt :
