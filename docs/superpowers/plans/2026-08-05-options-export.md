@@ -1309,7 +1309,7 @@ git commit -m "feat: durée réglable pour l'export vidéo"
 Ajouter à `e2e/flow.spec.ts`, à côté des tests d'export :
 
 ```ts
-test('les commandes d export sont atteignables sans défiler', async ({ page }) => {
+test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
   // Écran de téléphone : c est là que le problème se posait, l image y prenant
   // presque toute la hauteur utile.
   await page.setViewportSize({ width: 390, height: 664 })
@@ -1318,10 +1318,7 @@ test('les commandes d export sont atteignables sans défiler', async ({ page }) 
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
   await expect(page.getByTestId('reveal-slider')).toBeVisible()
 
-  await expect(page.getByTestId('open-image-options')).toBeInViewport()
-  await expect(page.getByTestId('open-video-options')).toBeInViewport()
-
-  // Et rien à défiler du tout : l image se contente de la hauteur restante.
+  // L image se contente de la hauteur restante : il n y a rien à défiler.
   const overflow = await page.evaluate(() => {
     const main = document.querySelector('main')
     if (!main) throw new Error('main introuvable')
@@ -1330,6 +1327,11 @@ test('les commandes d export sont atteignables sans défiler', async ({ page }) 
   expect(overflow).toBeLessThanOrEqual(1)
 })
 ```
+
+Ce test porte sur le dimensionnement seul, ce que cette tâche livre. L'assertion
+complémentaire — les deux boutons de la barre visibles sans défiler — rejoint ce test en
+Task 10, quand ces boutons existent. Cette tâche se termine donc avec **toute la suite
+au vert**, pas avec un test rouge en attente.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1439,12 +1441,12 @@ que l'image n'est **pas déformée** (un cadre portrait doit rester portrait), q
 tient entièrement à l'écran, et que la poignée de révélation suit toujours le doigt.
 Aucune assertion automatique ne remplace ce coup d'œil sur la déformation.
 
-- [ ] **Step 7: Le test reste rouge, et c'est normal**
+- [ ] **Step 7: Run tests to verify they pass**
 
-Run: `npx playwright test e2e/flow.spec.ts -g "sans défiler"`
-Expected: FAIL — toujours sur `open-image-options`, introduit par la Task 10. La partie
-« rien à défiler » est en revanche déjà satisfaite : le vérifier en commentant
-temporairement les deux assertions `toBeInViewport`.
+Run: `npx tsc -b && npx playwright test e2e/flow.spec.ts`
+Expected: PASS — dont le nouveau test « ne défile pas sur un écran de téléphone ». Les
+exports continuent de fonctionner : cette tâche n'a pas encore touché aux boutons, qui
+sont toujours dans le corps de l'écran.
 
 - [ ] **Step 8: Commit**
 
@@ -1683,6 +1685,17 @@ test('mémorise les réglages d export d une visite à l autre', async ({ page }
     page.getByTestId('layout-mode').getByRole('radio', { name: 'Vertical' }),
   ).toHaveAttribute('aria-checked', 'true')
 })
+```
+
+Compléter aussi le test « ne défile pas sur un écran de téléphone » de la Task 8 : les
+boutons de la barre existent désormais, donc l'assertion qui manquait a lieu d'être.
+Ajouter, juste après le `await expect(page.getByTestId('reveal-slider')).toBeVisible()` :
+
+```ts
+  // Le motif du problème d origine : les commandes d export sont atteignables sans
+  // le moindre geste de défilement.
+  await expect(page.getByTestId('open-image-options')).toBeInViewport()
+  await expect(page.getByTestId('open-video-options')).toBeInViewport()
 ```
 
 Et modifier les quatre exports existants pour ouvrir la feuille d'abord :
