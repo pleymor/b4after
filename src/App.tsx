@@ -1,4 +1,5 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
+import { AboutScreen } from './ui/AboutScreen'
 import { AlignScreen } from './ui/AlignScreen'
 import { CameraScreen } from './ui/CameraScreen'
 import { CompareScreen } from './ui/CompareScreen'
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/v/:id/align" element={<AlignScreen />} />
         <Route path="/v/:id/compare" element={<CompareScreen />} />
         <Route path="/v/:id" element={<ViewpointDetailScreen />} />
+        <Route path="/about" element={<AboutScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
       </Routes>
     </BrowserRouter>

@@ -615,7 +615,24 @@ test('affiche l état du stockage dans les réglages', async ({ page }) => {
 
   await expect(page.getByTestId('storage-usage')).toContainText(/o|ko|Mo|Go/)
   await expect(page.getByTestId('persistence-state')).toBeVisible()
-  await expect(page.getByTestId('app-version')).toBeVisible()
+})
+
+test('présente le projet et sa version sur la page À propos', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByRole('link', { name: 'Réglages' }).click()
+  await page.getByTestId('about-link').click()
+
+  // Un numéro de version affiché, quel qu il soit : le figer ici obligerait à
+  // toucher ce test à chaque montée de version.
+  await expect(page.getByTestId('app-version')).toContainText(/\d+\.\d+\.\d+/)
+  await expect(page.getByTestId('build-date')).toContainText(/\d{2}\/\d{2}\/\d{4}/)
+  // Le serveur de test tourne depuis le dépôt : la révision est réelle, pas 'dev'.
+  await expect(page.getByTestId('commit-sha')).not.toBeEmpty()
+  await expect(page.getByRole('link', { name: /github/i })).toHaveAttribute(
+    'href',
+    'https://github.com/pleymor/b4after',
+  )
+  await expect(page.getByTestId('share-app')).toBeVisible()
 })
 
 test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({ page }) => {
