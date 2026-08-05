@@ -28,14 +28,15 @@ export function Sheet({
 
   return (
     <div className="fixed inset-0 z-10 flex flex-col justify-end">
-      {/* Le voile ferme la feuille, et absorbe les tapes qui la manquent : sans lui,
-          une tape à côté atteindrait le curseur de révélation sous la feuille. */}
-      <button
-        type="button"
-        aria-label="Fermer"
-        onClick={onClose}
-        className="flex-1 bg-slate-950/70"
-      />
+      {/* Le voile ferme la feuille et absorbe les tapes qui la manquent : sans lui, une
+          tape à côté atteindrait le curseur de révélation situé dessous.
+
+          Hors de l'arbre d'accessibilité, volontairement : c'est une commodité pour le
+          pointeur, redondante avec la croix de l'en-tête et la touche Échap. Exposé
+          comme bouton nommé « Fermer », il entrerait en collision avec celle de
+          l'en-tête — et la correspondance par sous-chaîne de Playwright rend un simple
+          renommage insuffisant. */}
+      <div aria-hidden="true" onClick={onClose} className="flex-1 bg-slate-950/70" />
       <div
         role="dialog"
         aria-modal="true"
