@@ -716,3 +716,50 @@ test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
   // 3 allers-retours x 1 palier, aucune frame de transition.
   expect(result.progress.at(-1)).toEqual([3, 3])
 })
+
+test('renderCrossfadeGif élargit à 1080 px sur demande', async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 1200, height: 1600 }
+    const bitmap = window.__stripes(1200, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 1080, transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // 1080 / 1200 = 0.9 ; 1600 x 0.9 = 1440.
+  expect(size).toEqual({ width: 1080, height: 1440 })
+})
+
+test("renderCrossfadeGif n'agrandit jamais un cadre plus petit que la cible", async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 300, height: 400 }
+    const bitmap = window.__stripes(300, 400)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 1080, transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // La contrainte tient dans les deux sens : demander plus grand que le cadre ne
+  // fabrique pas du détail qui n existe pas.
+  expect(size).toEqual({ width: 300, height: 400 })
+})

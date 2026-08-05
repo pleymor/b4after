@@ -1,6 +1,6 @@
-import type { Transition } from '@/lib/exportOptions'
+import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, transitionSteps } from './crossfade'
+import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
 import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
@@ -58,6 +58,7 @@ export async function renderCrossfadeVideo(
   frame: Size,
   options: {
     transition?: Transition
+    width?: VideoWidth
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -67,7 +68,8 @@ export async function renderCrossfadeVideo(
   const mime = supportedVideoMime()
   if (!mime) throw new Error('Aucun format vidéo pris en charge')
 
-  const widthFactor = Math.min(1, VIDEO_MAX_WIDTH / frame.width)
+  // Le plafond n est jamais franchi vers le haut : un export n agrandit pas.
+  const widthFactor = Math.min(1, targetWidth(options.width ?? VIDEO_MAX_WIDTH, frame) / frame.width)
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 

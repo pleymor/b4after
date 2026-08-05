@@ -1,7 +1,8 @@
-import type { Transition } from '@/lib/exportOptions'
+import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size, Transform } from '@/types'
 import { drawShot, type Drawable } from './drawShot'
 import { GIF_STEPS } from './gif'
+import { EXPORT_MAX_EDGE } from './sideBySide'
 import type { ComparisonInput } from './sideBySide'
 
 /** Une entrée de comparaison ramenée à l échelle d export, sans sa date. */
@@ -28,6 +29,15 @@ export function scaleInput(input: ComparisonInput, factor: number): ScaledInput 
       height: input.shot.height * factor,
     },
   }
+}
+
+/**
+ * Largeur cible en pixels pour un export animé. `'full'` prend la largeur du cadre,
+ * plafonnée au même maximum que l export JPEG : un cadre de 4000 px n a pas à
+ * produire une vidéo de 4000 px de large.
+ */
+export function targetWidth(width: VideoWidth, frame: Size): number {
+  return width === 'full' ? Math.min(frame.width, EXPORT_MAX_EDGE) : width
 }
 
 /**

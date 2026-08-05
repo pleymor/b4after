@@ -1,6 +1,6 @@
-import type { Transition } from '@/lib/exportOptions'
+import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, transitionSteps } from './crossfade'
+import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
 import type { ComparisonInput } from './sideBySide'
 import type { GifRequest, GifResponse } from './gif.worker'
 import GifWorker from './gif.worker?worker'
@@ -26,6 +26,7 @@ export async function renderCrossfadeGif(
   frame: Size,
   options: {
     transition?: Transition
+    width?: VideoWidth
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -37,9 +38,8 @@ export async function renderCrossfadeGif(
   // aucune et se réduit donc à deux frames.
   const steps = transitionSteps(transition) + 2
 
-  // Contrairement à l export JPEG, c est la largeur seule qui borne le GIF : c est
-  // elle qui détermine le poids du fichier au partage.
-  const widthFactor = Math.min(1, GIF_MAX_WIDTH / frame.width)
+  // Le plafond n est jamais franchi vers le haut : un export n agrandit pas.
+  const widthFactor = Math.min(1, targetWidth(options.width ?? GIF_MAX_WIDTH, frame) / frame.width)
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { IDENTITY } from '@/align/transform'
-import { scaleInput, transitionSteps } from './crossfade'
+import { scaleInput, targetWidth, transitionSteps } from './crossfade'
 
 describe('transitionSteps', () => {
   it('garde le rythme du fondu actuel', () => {
@@ -38,5 +38,22 @@ describe('scaleInput', () => {
     // `takenAt` ne sert qu au bandeau de l image côte-à-côte : il n a rien à faire
     // dans une entrée de rendu animé.
     expect(scaled).not.toHaveProperty('takenAt')
+  })
+})
+
+describe('targetWidth', () => {
+  it('rend la largeur demandée', () => {
+    expect(targetWidth(640, { width: 1200, height: 1600 })).toBe(640)
+    expect(targetWidth(1080, { width: 1200, height: 1600 })).toBe(1080)
+  })
+
+  it('rend la largeur du cadre en pleine résolution', () => {
+    expect(targetWidth('full', { width: 1200, height: 1600 })).toBe(1200)
+  })
+
+  it('plafonne la pleine résolution à EXPORT_MAX_EDGE', () => {
+    // Un cadre de 4000 px n a pas à produire une vidéo de 4000 px de large : le
+    // plafond est le même que celui de l export JPEG.
+    expect(targetWidth('full', { width: 4000, height: 3000 })).toBe(2048)
   })
 })
