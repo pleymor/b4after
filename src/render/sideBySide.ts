@@ -1,4 +1,5 @@
-import { formatDate } from '@/lib/format'
+import type { ImageOptions } from '@/lib/exportOptions'
+import { formatDate, formatDateTime } from '@/lib/format'
 import type { Size, Transform } from '@/types'
 import { drawShot, type Drawable } from './drawShot'
 import { fitFactor } from './thumbnail'
@@ -15,19 +16,46 @@ export type ComparisonInput = {
   shot: Size
 }
 
+/**
+ * Réduit le corps de la police jusqu à ce que `text` tienne dans `maxWidth`, et pose
+ * la police retenue sur le contexte.
+ *
+ * Le corps est calculé sur la hauteur du bandeau, qui ne dit rien de la longueur du
+ * texte : « JJ/MM/AAAA à HH:MM » est environ 1,7 fois plus long que la date seule et
+ * déborderait d une cellule étroite.
+ */
+function setFittedFont(
+  ctx: OffscreenCanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  startSize: number,
+): void {
+  let size = startSize
+  ctx.font = `${size}px sans-serif`
+  // Plancher à 6 px : en dessous le texte est illisible de toute façon, et la boucle
+  // doit se terminer même sur un cadre absurdement étroit.
+  while (size > 6 && ctx.measureText(text).width > maxWidth) {
+    size -= 1
+    ctx.font = `${size}px sans-serif`
+  }
+}
+
 export async function renderSideBySide(
   before: ComparisonInput,
   after: ComparisonInput,
   frame: Size,
-  options: { showDates: boolean },
+  options: ImageOptions,
 ): Promise<Blob> {
   const factor = fitFactor(frame, EXPORT_MAX_EDGE)
   const cellWidth = Math.round(frame.width * factor)
   const cellHeight = Math.round(frame.height * factor)
-  const bandHeight = options.showDates ? Math.round(cellWidth * 0.14) : 0
+  const showStamp = options.stamp !== 'none'
+  const bandHeight = showStamp ? Math.round(cellWidth * 0.14) : 0
 
-  // Un cadre en portrait se lit mieux côte à côte, un cadre en paysage empilé.
-  const horizontal = frame.height > frame.width
+  // `'auto'` conserve la règle d origine : un cadre en portrait se lit mieux côte à
+  // côte, un cadre en paysage empilé.
+  const horizontal =
+    options.layout === 'auto' ? frame.height > frame.width : options.layout === 'horizontal'
 
   const canvas = new OffscreenCanvas(
     horizontal ? cellWidth * 2 + GUTTER : cellWidth,
@@ -62,14 +90,17 @@ export async function renderSideBySide(
     )
     ctx.restore()
 
-    if (options.showDates) {
+    if (showStamp) {
+      const label =
+        options.stamp === 'datetime' ? formatDateTime(input.takenAt) : formatDate(input.takenAt)
+
       ctx.fillStyle = '#0f172a'
       ctx.fillRect(x, y + cellHeight, cellWidth, bandHeight)
       ctx.fillStyle = '#f1f5f9'
-      ctx.font = `${Math.round(bandHeight * 0.62)}px sans-serif`
+      setFittedFont(ctx, label, cellWidth * 0.92, Math.round(bandHeight * 0.62))
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(formatDate(input.takenAt), x + cellWidth / 2, y + cellHeight + bandHeight / 2)
+      ctx.fillText(label, x + cellWidth / 2, y + cellHeight + bandHeight / 2)
     }
   }
 

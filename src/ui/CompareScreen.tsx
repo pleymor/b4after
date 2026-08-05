@@ -102,7 +102,10 @@ export function CompareScreen() {
     setBusy('jpeg')
     setStatus("Génération de l'image…")
     try {
-      const blob = await renderSideBySide(inputs.before, inputs.after, frame, { showDates })
+      const blob = await renderSideBySide(inputs.before, inputs.after, frame, {
+        stamp: showDates ? 'date' : 'none',
+        layout: 'auto',
+      })
       const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.jpg`
       const outcome = await shareOrDownload(new File([blob], name, { type: 'image/jpeg' }))
       setStatus(outcome === 'downloaded' ? 'Image téléchargée.' : null)

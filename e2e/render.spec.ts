@@ -135,7 +135,8 @@ test('renderSideBySide accole deux photos portrait horizontalement', async ({ pa
     })
 
     const blob = await renderSideBySide(input('#ff0000'), input('#0000ff'), frame, {
-      showDates: false,
+      stamp: 'none',
+      layout: 'auto',
     })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
@@ -151,7 +152,7 @@ test('renderSideBySide accole deux photos portrait horizontalement', async ({ pa
     }
   }, HELPERS)
 
-  // 2 x 100 px + 8 px de séparateur, hauteur inchangée puisque showDates est faux.
+  // 2 x 100 px + 8 px de séparateur, hauteur inchangée puisque le bandeau est absent.
   expect(result).toMatchObject({ type: 'image/jpeg', width: 208, height: 150 })
   expect(result.left[0]).toBeGreaterThan(200)
   expect(result.right[2]).toBeGreaterThan(200)
@@ -168,7 +169,7 @@ test('renderSideBySide empile deux photos paysage verticalement', async ({ page 
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: false }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -187,13 +188,99 @@ test('renderSideBySide réserve un bandeau pour les dates', async ({ page }) => 
     const input = { source: bitmap, transform: IDENTITY, takenAt: Date.UTC(2026, 6, 31, 12), shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: true }),
+      await renderSideBySide(input, input, frame, { stamp: 'date', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
 
   // Bandeau = round(100 * 0.14) = 14 px sous chaque photo.
   expect(size).toEqual({ width: 208, height: 164 })
+})
+
+test('renderSideBySide empile un cadre portrait quand la disposition est forcée', async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre portrait : la règle automatique l accolerait horizontalement. Inverser
+    // ce choix est précisément ce qui prouve que l option est honorée — un test sur
+    // un cadre paysage passerait aussi avec `layout` ignoré.
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'vertical' }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  // 100 px de large, 2 x 150 px + 8 px de séparateur.
+  expect(size).toEqual({ width: 100, height: 308 })
+})
+
+test('renderSideBySide accole un cadre paysage quand la disposition est forcée', async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 150, height: 100 }
+    const bitmap = window.__stripes(150, 100)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'horizontal' }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  expect(size).toEqual({ width: 308, height: 100 })
+})
+
+test('renderSideBySide écrit l heure sans déborder du bandeau', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre volontairement étroit : « JJ/MM/AAAA à HH:MM » est environ 1,7 fois plus
+    // long que la date seule, alors que le corps de la police est calculé sur la
+    // hauteur du bandeau. Sans garde-fou, le texte sortirait de sa cellule.
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = {
+      source: bitmap,
+      transform: IDENTITY,
+      takenAt: new Date(2026, 6, 31, 14, 5).getTime(),
+      shot: frame,
+    }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'datetime', layout: 'auto' }),
+    )
+    const canvas = new OffscreenCanvas(decoded.width, decoded.height)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(decoded, 0, 0)
+
+    // Le bandeau est le sombre sous la première cellule ; le séparateur entre les
+    // deux cellules, lui, reste blanc. Un texte débordant y laisserait des pixels
+    // clairs : on échantillonne la colonne du séparateur sur la hauteur du bandeau.
+    const gutter = window.__pixel(ctx, 103, 150 + 7)
+    return { width: decoded.width, height: decoded.height, gutter }
+  }, HELPERS)
+
+  // Bandeau = round(100 * 0.14) = 14 px, comme pour la date seule.
+  expect(result).toMatchObject({ width: 208, height: 164 })
+  // Blanc franc : rien du texte n a franchi la cellule.
+  expect(result.gutter[0]).toBeGreaterThan(200)
+  expect(result.gutter[1]).toBeGreaterThan(200)
+  expect(result.gutter[2]).toBeGreaterThan(200)
 })
 
 test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", async ({ page }) => {
@@ -207,7 +294,7 @@ test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", asyn
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: false }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -236,7 +323,10 @@ test('renderSideBySide réduit aussi la translation stockée', async ({ page }) 
     // tx = ±1000 et non ±1500 : à 1500 la translation sature le jeu disponible, la
     // frontière rouge/bleu sort de la cellule dans les deux cas et le test ne
     // discriminerait plus rien.
-    const blob = await renderSideBySide(input(1000), input(-1000), frame, { showDates: false })
+    const blob = await renderSideBySide(input(1000), input(-1000), frame, {
+      stamp: 'none',
+      layout: 'auto',
+    })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
     const ctx = canvas.getContext('2d')
