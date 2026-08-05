@@ -534,6 +534,60 @@ test('replie sur le GIF quand aucun format vidéo n est pris en charge', async (
   expect(file.suggestedFilename()).toMatch(/\.gif$/)
 })
 
+test("un échec d'export animé affiche un message visible, distinct du succès", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    // Force le repli GIF (aucun autre moyen fiable de faire échouer MediaRecorder dans
+    // tous les environnements de test), puis fait échouer ce chemin précis : c est la
+    // seule fonction du worker GIF que `renderCrossfadeGif` appelle avant de poster son
+    // message, sur le modèle du test « replie sur le GIF… » qui neutralise déjà
+    // `MediaRecorder.isTypeSupported`.
+    MediaRecorder.isTypeSupported = () => false
+    OffscreenCanvasRenderingContext2D.prototype.getImageData = () => {
+      throw new Error('échec simulé pour le test')
+    }
+  })
+
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-video-options').click()
+  await page.getByTestId('export-gif').click()
+
+  const status = page.getByTestId('export-status')
+  await expect(status).toBeVisible()
+  await expect(status).toContainText('échoué')
+  // Couleur d alerte, distincte du texte neutre du succès et de l annulation.
+  await expect(status).toHaveClass(/text-rose-300/)
+  // La feuille s est refermée : le message n est plus recouvert par son panneau
+  // opaque, qui masquait entièrement le pied de page avant ce correctif.
+  await expect(page.getByTestId('close-sheet')).toHaveCount(0)
+})
+
+test("fermer la feuille pendant l'encodage n'interrompt ni ne cache la progression", async ({
+  page,
+}) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-video-options').click()
+  await page.getByTestId('export-gif').click()
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+
+  // Tape sur la croix pendant l encodage : sans le correctif, la feuille se refermait
+  // et emportait avec elle la progression et le bouton d annulation, sans aucun moyen
+  // de les retrouver avant la fin de l export.
+  await page.getByTestId('close-sheet').click()
+
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+  await expect(page.getByTestId('cancel-export')).toBeVisible()
+
+  // L export peut toujours être interrompu par son propre bouton, resté visible.
+  await page.getByTestId('cancel-export').click()
+  await expect(page.getByTestId('export-status')).toContainText('annulé')
+})
+
 test('mémorise les réglages d export d une visite à l autre', async ({ page }) => {
   const { viewpointId, before, after } = await seedPair(page)
   const url = `/v/${viewpointId}/compare?before=${before}&after=${after}`

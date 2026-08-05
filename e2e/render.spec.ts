@@ -713,8 +713,9 @@ test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
 
   expect(result.type.startsWith('video/mp4')).toBe(true)
   expect(result.size).toBeGreaterThan(1000)
-  // 3 allers-retours x 1 palier, aucune frame de transition.
-  expect(result.progress.at(-1)).toEqual([3, 3])
+  // 3 allers-retours x 1 palier, aucune frame de transition, plus le palier final qui
+  // montre l après (voir le test dédié plus bas) : 3 + 1.
+  expect(result.progress.at(-1)).toEqual([4, 4])
 })
 
 test('renderCrossfadeGif élargit à 1080 px sur demande', async ({ page }) => {
@@ -764,26 +765,99 @@ test("renderCrossfadeGif n'agrandit jamais un cadre plus petit que la cible", as
   expect(size).toEqual({ width: 300, height: 400 })
 })
 
-test("renderCrossfadeVideo joue le nombre d'allers-retours demandé", async ({ page }) => {
-  const progress = await page.evaluate(async (helpers) => {
+test("renderCrossfadeGif plafonne à 1080 px même en qualité maximale", async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre large : `'full'` viserait EXPORT_MAX_EDGE (2048), largement au-delà du
+    // plafond du chemin GIF — c est précisément ce qui doit être retenu ici.
+    const frame = { width: 2400, height: 1600 }
+    const bitmap = window.__stripes(2400, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 'full', transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // 1080 / 2400 = 0.45 ; 1600 x 0.45 = 720. Sans le plafond, la largeur viserait 2048.
+  expect(size).toEqual({ width: 1080, height: 720 })
+})
+
+test("renderCrossfadeVideo joue le nombre d'allers-retours demandé, et montre bien l'après en coupe", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
     eval(helpers)
     const { renderCrossfadeVideo } = await import('/src/render/video.ts')
     const { IDENTITY } = await import('/src/align/transform.ts')
 
     const frame = { width: 100, height: 150 }
-    const bitmap = window.__stripes(100, 150)
-    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
 
-    const seen = []
+    const progress = []
     // `transition: 'cut'` pour que le test reste court : un palier par aller-retour,
-    // aucune frame de fondu. Ce qu'on mesure ici, c'est le nombre d'allers-retours.
-    await renderCrossfadeVideo(input, input, frame, {
+    // aucune frame de fondu. Des couleurs franches et différentes pour l avant et
+    // l après : c est le seul moyen de prouver que le palier final montre bien l après,
+    // et non le dernier avant simplement tenu plus longtemps.
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
       reps: 1,
       transition: 'cut',
-      onProgress: (done, total) => seen.push([done, total]),
+      onProgress: (done, total) => progress.push([done, total]),
     })
-    return seen
+
+    const url = URL.createObjectURL(blob)
+    const video = document.createElement('video')
+    video.muted = true
+    video.src = url
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true })
+      video.addEventListener('error', () => reject(video.error), { once: true })
+    })
+
+    const sampleAt = async (time) => {
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true })
+        video.currentTime = time
+      })
+      const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight)
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(video, 0, 0)
+      return window.__pixel(ctx, Math.floor(video.videoWidth / 2), Math.floor(video.videoHeight / 2))
+    }
+
+    // Avec `reps: 1`, la boucle ne dessine qu un seul palier (l avant, tenu 500 ms) ;
+    // le palier ajouté par le correctif — l après — le suit immédiatement, sur les
+    // 500 ms suivantes. On échantillonne donc peu après chaque frontière, avec assez
+    // de marge pour rester insensible à la latence de démarrage de l enregistrement.
+    const start = await sampleAt(0.1)
+    const end = await sampleAt(0.6)
+
+    URL.revokeObjectURL(url)
+    return { start, end, progress }
   }, HELPERS)
 
-  expect(progress.at(-1)).toEqual([1, 1])
+  // 1 aller-retour (le palier « avant ») plus le palier final ajouté par le correctif :
+  // sans lui la barre de progression n aurait jamais atteint 100 %.
+  expect(result.progress.at(-1)).toEqual([2, 2])
+  // Preuve directe que la coupe se lit bien avant → après même avec un seul
+  // aller-retour : sans le correctif, `end` resterait rouge comme `start`. Des seuils,
+  // pas une égalité stricte : l encodage H.264 introduit un bruit de quantification
+  // YUV qui décale chaque canal de quelques niveaux (`#ff0000` ressort par exemple en
+  // ~[254, 1, 1]).
+  expect(result.start[0]).toBeGreaterThan(200)
+  expect(result.start[2]).toBeLessThan(50)
+  expect(result.end[2]).toBeGreaterThan(200)
+  expect(result.end[0]).toBeLessThan(50)
 })

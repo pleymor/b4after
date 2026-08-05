@@ -70,6 +70,9 @@ export function CompareScreen() {
   const [viewpoint, setViewpoint] = useState<Viewpoint | null>(null)
   const [pair, setPair] = useState<{ before: Shot; after: Shot } | null>(null)
   const [status, setStatus] = useState<string | null>('Chargement…')
+  // Distingue l échec (alerte) du succès et de l information neutre : les trois
+  // partagent la même zone de statut, sans quoi rien ne les distinguerait à l œil.
+  const [statusError, setStatusError] = useState(false)
   const [options, updateOptions] = useExportOptions()
   const [sheet, setSheet] = useState<null | 'image' | 'video'>(null)
   const [progress, setProgress] = useState<number | null>(null)
@@ -116,6 +119,22 @@ export function CompareScreen() {
   // s applique pas au repli GIF.
   const videoSupported = supportedVideoMime() !== null
 
+  /** Pose le statut affiché dans le pied de page, avec sa couleur (alerte ou neutre). */
+  function setFooterStatus(message: string | null, error = false) {
+    setStatus(message)
+    setStatusError(error)
+  }
+
+  // Fermer la feuille pendant un encodage ferait disparaître d un coup la progression
+  // et le bouton d annulation, sans aucun moyen de les retrouver : seul le bouton
+  // « Annuler l export », qui reste visible, doit alors pouvoir interrompre. Une fois
+  // l encodage terminé (succès, échec ou annulation), la feuille se ferme d elle-même
+  // ailleurs, ce qui ne passe pas par cette fonction.
+  function closeSheet() {
+    if (busy === 'anim') return
+    setSheet(null)
+  }
+
   function inputsFor(): { before: ComparisonInput; after: ComparisonInput } | null {
     if (!pair || !beforeBitmap || !afterBitmap) return null
     return {
@@ -140,16 +159,19 @@ export function CompareScreen() {
     // l autre export lancerait un second travail concurrent, donc deux partages.
     if (!inputs || !frame || !viewpoint || !pair || busy) return
     setBusy('jpeg')
-    setStatus("Génération de l'image…")
+    setFooterStatus("Génération de l'image…")
     try {
       const blob = await renderSideBySide(inputs.before, inputs.after, frame, options.image)
       const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.jpg`
       const outcome = await shareOrDownload(new File([blob], name, { type: 'image/jpeg' }))
-      setSheet(null)
-      setStatus(outcome === 'downloaded' ? 'Image téléchargée.' : null)
+      setFooterStatus(outcome === 'downloaded' ? 'Image téléchargée.' : null)
     } catch {
-      setStatus("La génération de l'image a échoué.")
+      setFooterStatus("La génération de l'image a échoué.", true)
     } finally {
+      // Dans le `finally`, et non plus seulement sur le chemin heureux : sinon le
+      // message d échec ou d annulation reste rendu sous la feuille encore ouverte,
+      // recouverte et donc invisible.
+      setSheet(null)
       setBusy(null)
     }
   }
@@ -163,7 +185,7 @@ export function CompareScreen() {
     // cours de route, et refaire l appel à mi-parcours ne servirait à rien.
     const mime = supportedVideoMime()
     setBusy('anim')
-    setStatus(null)
+    setFooterStatus(null)
     setProgress(0)
     try {
       const blob = mime
@@ -181,18 +203,23 @@ export function CompareScreen() {
       const ext = mime ? 'mp4' : 'gif'
       const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.${ext}`
       const outcome = await shareOrDownload(new File([blob], name, { type: mime ?? 'image/gif' }))
-      setSheet(null)
-      setStatus(outcome === 'downloaded' ? 'Export téléchargé.' : null)
+      setFooterStatus(outcome === 'downloaded' ? 'Export téléchargé.' : null)
     } catch (caught) {
-      setStatus(
-        caught instanceof DOMException && caught.name === 'AbortError'
-          ? 'Export annulé.'
-          : "La génération de l'export animé a échoué.",
+      // L annulation est un choix de l utilisateur, pas un échec : elle reste dans la
+      // couleur neutre. Seul un échec réel prend la couleur d alerte.
+      const cancelled = caught instanceof DOMException && caught.name === 'AbortError'
+      setFooterStatus(
+        cancelled ? 'Export annulé.' : "La génération de l'export animé a échoué.",
+        !cancelled,
       )
     } finally {
       abortRef.current = null
       setProgress(null)
       setBusy(null)
+      // Dans le `finally`, et non plus seulement sur le chemin heureux : sinon le
+      // message d échec ou d annulation reste rendu sous la feuille encore ouverte,
+      // recouverte et donc invisible.
+      setSheet(null)
     }
   }
 
@@ -232,7 +259,7 @@ export function CompareScreen() {
             {status && (
               <p
                 data-testid="export-status"
-                className="pb-2 text-center text-sm text-slate-300"
+                className={`pb-2 text-center text-sm ${statusError ? 'text-rose-300' : 'text-slate-300'}`}
               >
                 {status}
               </p>
@@ -306,7 +333,7 @@ export function CompareScreen() {
         )}
       </div>
 
-      <Sheet title="Image côte-à-côte" open={sheet === 'image'} onClose={() => setSheet(null)}>
+      <Sheet title="Image côte-à-côte" open={sheet === 'image'} onClose={closeSheet}>
         <OptionRow
           testId="stamp-mode"
           label="Dates sur l'image"
@@ -332,7 +359,7 @@ export function CompareScreen() {
         </button>
       </Sheet>
 
-      <Sheet title="Vidéo animée" open={sheet === 'video'} onClose={() => setSheet(null)}>
+      <Sheet title="Vidéo animée" open={sheet === 'video'} onClose={closeSheet}>
         <OptionRow
           testId="transition-mode"
           label="Transition"
