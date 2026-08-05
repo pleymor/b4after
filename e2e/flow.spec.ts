@@ -531,6 +531,48 @@ test('replie sur le GIF quand aucun format vidéo n est pris en charge', async (
   expect(file.suggestedFilename()).toMatch(/\.gif$/)
 })
 
+test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
+  // Écran de téléphone : c est là que le problème se posait, l image y prenant
+  // presque toute la hauteur utile.
+  await page.setViewportSize({ width: 390, height: 664 })
+
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const slider = page.getByTestId('reveal-slider')
+  await expect(slider).toBeVisible()
+
+  // L image se contente de la hauteur restante : il n y a rien à défiler.
+  const overflow = await page.evaluate(() => {
+    const main = document.querySelector('main')
+    if (!main) throw new Error('main introuvable')
+    return main.scrollHeight - main.clientHeight
+  })
+  expect(overflow).toBeLessThanOrEqual(1)
+
+  // Preuve de non-déformation, sans comparer de rapports largeur/hauteur peints :
+  // avec `object-contain`, le canvas remplit toute la boîte du slider et l image y
+  // est *contenue* (bandes noires éventuelles), donc le rapport de la boîte ne dit
+  // rien du rapport réellement peint — il faudrait recalculer les bandes, comme le
+  // fait `contentRect` plus haut dans ce fichier pour un autre scénario.
+  //
+  // On prend un chemin plus direct : le canvas garde ses attributs `width`/`height`
+  // intrinsèques, égaux au cadre canonique (300×400 dans ce fixture), quelle que
+  // soit sa taille CSS — c est `ShotCanvas` qui les fixe, indépendamment du style.
+  // Un élément remplacé avec un ratio intrinsèque connu ne peut, par construction
+  // CSS, déformer son contenu sous `object-contain` : celui-ci redimensionne en
+  // préservant ce ratio. Il suffit donc de vérifier que ce couple d attributs a
+  // survécu, et que la boîte qui l accueille tient entièrement dans le viewport
+  // (sans quoi elle serait rognée, pas déformée, mais tout aussi invisible).
+  const sliderBox = (await slider.boundingBox())!
+  expect(sliderBox.y + sliderBox.height).toBeLessThanOrEqual(664)
+
+  const canvasSize = await slider
+    .locator('canvas')
+    .first()
+    .evaluate((el: HTMLCanvasElement) => ({ width: el.width, height: el.height }))
+  expect(canvasSize).toEqual({ width: 300, height: 400 })
+})
+
 test('signale une comparaison introuvable', async ({ page }) => {
   const { viewpointId } = await seed(page, 'Façade nord')
   await page.goto(`/v/${viewpointId}/compare?before=inconnu&after=inconnu`)

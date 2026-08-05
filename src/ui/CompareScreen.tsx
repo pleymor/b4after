@@ -163,10 +163,10 @@ export function CompareScreen() {
         </Link>
       }
     >
-      <div className="space-y-4 p-4">
+      <div className="flex h-full flex-col gap-4 p-4">
         {pair && frame && (
           <>
-            <div style={{ aspectRatio: `${frame.width} / ${frame.height}` }}>
+            <div className="flex min-h-0 flex-1">
               <RevealSlider
                 before={
                   <ShotCanvas
@@ -174,7 +174,7 @@ export function CompareScreen() {
                     transform={pair.before.transform}
                     frame={frame}
                     shot={{ width: pair.before.width, height: pair.before.height }}
-                    className="h-full w-full"
+                    className="h-full w-full object-contain"
                   />
                 }
                 after={
@@ -183,7 +183,7 @@ export function CompareScreen() {
                     transform={pair.after.transform}
                     frame={frame}
                     shot={{ width: pair.after.width, height: pair.after.height }}
-                    className="h-full w-full"
+                    className="h-full w-full object-contain"
                   />
                 }
               />

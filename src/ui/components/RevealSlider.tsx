@@ -18,7 +18,7 @@ export function RevealSlider({ before, after }: { before: ReactNode; after: Reac
     <div
       ref={containerRef}
       data-testid="reveal-slider"
-      className="relative touch-none overflow-hidden rounded-xl bg-black"
+      className="relative h-full w-full touch-none overflow-hidden rounded-xl bg-black"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId)
         updateFrom(event.clientX)
