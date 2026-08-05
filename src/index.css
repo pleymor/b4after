@@ -1,6 +1,20 @@
 @import 'tailwindcss';
 
 html, body, #root { height: 100%; }
+
+/* Flash de prise de vue : plein blanc instantané, puis fondu. La durée est fixée en
+   ligne par `CaptureFlash`, à partir de la même constante que le minuteur du magasin. */
+@keyframes capture-flash {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.capture-flash { animation-name: capture-flash; animation-timing-function: ease-out; animation-fill-mode: forwards; }
+/* Sans fondu, mais le voile reste : c est le seul retour visuel de la tape, le
+   supprimer priverait ces utilisateurs du repère, pas d une fioriture. Il s éteint net
+   quand le magasin repasse à l état inactif. */
+@media (prefers-reduced-motion: reduce) {
+  .capture-flash { animation: none; opacity: 1; }
+}
 body {
   background: #0f172a;
   color: #f1f5f9;

@@ -158,22 +158,23 @@ function RetakeCapture({
     // Dépendances primitives : `frame` est un objet recréé à chaque rendu.
   }, [frame.width, frame.height])
 
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function onShutter() {
-    setBusy(true)
+  /**
+   * Aucun `await` entre la tape et la navigation : l écran de calage s ouvre sur la photo
+   * saisie pendant que son encodage tourne encore en arrière-plan. C est ce qui supprime
+   * les secondes d écran figé qu on avait à attendre le JPEG.
+   */
+  function onShutter() {
     setError(null)
     try {
-      const captured = await capture()
+      const captured = capture()
       // Rien n est écrit en base : la photo ne rejoint la série qu après validation
       // du calage.
       setPendingShot({ viewpointId, frame, captured })
       navigate(`/v/${viewpointId}/align`)
     } catch {
       setError('La capture a échoué. Réessayez.')
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -239,7 +240,7 @@ function RetakeCapture({
           <button
             type="button"
             data-testid="shutter"
-            disabled={status !== 'ready' || busy}
+            disabled={status !== 'ready'}
             onClick={onShutter}
             className="absolute bottom-6 left-1/2 size-20 -translate-x-1/2 rounded-full border-4 border-white bg-white/30 disabled:opacity-40"
             aria-label="Prendre la photo"

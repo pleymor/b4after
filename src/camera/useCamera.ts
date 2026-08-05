@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { makeThumbnail } from '@/render/thumbnail'
-import { toJpegBlob } from '@/render/toJpegBlob'
+import { triggerFlash } from '@/capture/flash'
+import { startEncoding, type PendingEncode } from '@/capture/pendingEncode'
+import { encodeFrame, type EncodedFrame } from '@/render/encodeFrame'
 
 export type CameraStatus = 'starting' | 'ready' | 'denied' | 'unavailable'
 
+/**
+ * Une prise, telle qu elle existe dès la tape : une image affichable et un encodage en
+ * cours. `source` est un `Drawable`, donc directement dessinable par `ShotCanvas` — rien
+ * n attend le JPEG pour montrer la photo.
+ */
 export type CapturedFrame = {
-  blob: Blob
-  thumbBlob: Blob
+  source: OffscreenCanvas
   width: number
   height: number
+  encoding: PendingEncode<EncodedFrame>
 }
-
-export const CAPTURE_QUALITY = 0.9
 
 /**
  * Possède le cycle de vie du MediaStream : c est le seul module de l app qui en
@@ -85,20 +89,36 @@ export function useCamera(options: { aspectRatio?: number }) {
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [])
 
-  const capture = useCallback(async (): Promise<CapturedFrame> => {
+  /**
+   * Saisit la trame courante, sans aucun `await`.
+   *
+   * L encodage JPEG coûte plusieurs secondes sur mobile, mais il ne sert qu à
+   * l écriture en base : le faire précéder l affichage laissait l écran figé sur le flux
+   * vivant, sans le moindre signe que la tape avait été prise en compte. On dessine donc
+   * la trame, on rend une image affichable immédiatement, et on encode derrière.
+   *
+   * Synchrone à dessein : la photo affichée est exactement celle de l instant de la
+   * tape, sans dérive d une trame gagnée en attendant une promesse.
+   */
+  const capture = useCallback((): CapturedFrame => {
     const video = videoRef.current
     if (!video || !video.videoWidth) throw new Error('Flux vidéo indisponible')
 
     const width = video.videoWidth
     const height = video.videoHeight
 
-    const blob = await toJpegBlob(video, { width, height }, CAPTURE_QUALITY)
-    const bitmap = await createImageBitmap(blob)
-    try {
-      const thumbBlob = await makeThumbnail(bitmap, { width, height })
-      return { blob, thumbBlob, width, height }
-    } finally {
-      bitmap.close()
+    const source = new OffscreenCanvas(width, height)
+    const ctx = source.getContext('2d')
+    if (!ctx) throw new Error('Contexte 2D indisponible')
+    ctx.drawImage(video, 0, 0, width, height)
+
+    triggerFlash()
+
+    return {
+      source,
+      width,
+      height,
+      encoding: startEncoding(() => encodeFrame(source, { width, height })),
     }
   }, [])
 

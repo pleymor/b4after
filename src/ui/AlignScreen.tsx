@@ -9,9 +9,18 @@ import { isQuotaError } from '@/db/storage'
 import { useBitmap } from '@/hooks/useBitmap'
 import { useShots } from '@/hooks/useShots'
 import type { Size, Transform } from '@/types'
+import { BusyStatus } from './components/BusyStatus'
 import { OpacitySlider } from './components/OpacitySlider'
 import { ShotCanvas } from './components/ShotCanvas'
 import { Screen } from './components/Screen'
+
+/** Étapes visibles de la validation : l encodage peut ne pas être fini à la tape. */
+type SaveStage = 'idle' | 'encoding' | 'saving'
+
+const STAGE_LABEL: Record<Exclude<SaveStage, 'idle'>, string> = {
+  encoding: 'Encodage de la photo…',
+  saving: 'Enregistrement…',
+}
 
 export function AlignScreen() {
   const { id } = useParams<{ id: string }>()
@@ -27,7 +36,10 @@ export function AlignScreen() {
   const { shots } = useShots(id)
   const reference = shots.at(-1)
   const { bitmap: referenceBitmap } = useBitmap(reference?.blob)
-  const { bitmap: capturedBitmap } = useBitmap(pending?.captured.blob)
+  // La photo saisie se dessine directement, sans décodage : elle est déjà en mémoire sous
+  // forme de canvas. La décoder depuis son blob ajoutait un troisième passage complet —
+  // encodage, décodage, redécodage — entre la tape et le premier pixel affiché.
+  const capturedSource = pending?.captured.source ?? null
 
   // `pending` est mémoïsé une fois pour toutes : ces deux objets doivent l être aussi,
   // sinon l effet qui recrée l état de geste se rejouerait à chaque rendu et
@@ -48,7 +60,7 @@ export function AlignScreen() {
 
   const [opacity, setOpacity] = useState(0.5)
   const [swapped, setSwapped] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [stage, setStage] = useState<SaveStage>('idle')
   const [error, setError] = useState<string | null>(null)
 
   const surfaceRef = useRef<HTMLDivElement | null>(null)
@@ -71,20 +83,37 @@ export function AlignScreen() {
   }
 
   async function onConfirm() {
-    // Garde synchrone : `busy` ne prend effet qu au rendu suivant, donc deux tapes
-    // rapprochées pourraient toutes deux entrer ici.
+    // Garde synchrone : le remplacement du bouton par le libellé d étape ne prend effet
+    // qu au rendu suivant, donc deux tapes rapprochées pourraient toutes deux entrer ici.
     if (writingRef.current) return
     const shot = peekPendingShot()
     if (!shot || !id) return
 
     writingRef.current = true
-    setBusy(true)
     setError(null)
+
+    // L encodage a démarré à la tape sur le déclencheur : le temps passé à caler joue en
+    // sa faveur, et il est presque toujours déjà fini ici.
+    setStage(shot.captured.encoding.isDone() ? 'saving' : 'encoding')
+
+    let encoded
+    try {
+      encoded = await shot.captured.encoding.result()
+    } catch {
+      // La photo reste en attente et l encodage est réessayable : un nouvel appui repart
+      // d un encodage neuf plutôt que de buter sur le même échec.
+      writingRef.current = false
+      setStage('idle')
+      setError("La photo n'a pas pu être préparée. Réessayez.")
+      return
+    }
+
+    setStage('saving')
     try {
       await addShot({
         viewpointId: id,
-        blob: shot.captured.blob,
-        thumbBlob: shot.captured.thumbBlob,
+        blob: encoded.blob,
+        thumbBlob: encoded.thumbBlob,
         width: shot.captured.width,
         height: shot.captured.height,
         transform,
@@ -97,12 +126,12 @@ export function AlignScreen() {
     } catch (caught) {
       // La photo reste en attente : un nouvel essai est possible sans reprendre.
       writingRef.current = false
+      setStage('idle')
       setError(
         isQuotaError(caught)
           ? "L'espace de stockage est plein. Supprimez d'anciennes photos, puis réessayez — celle-ci n'est pas perdue."
           : "L'enregistrement a échoué. Réessayez.",
       )
-      setBusy(false)
     }
   }
 
@@ -118,7 +147,7 @@ export function AlignScreen() {
         height: reference?.height ?? frame.height,
       },
     },
-    { key: 'captured', source: capturedBitmap, transform, shot: shotSize },
+    { key: 'captured', source: capturedSource, transform, shot: shotSize },
   ]
   const ordered = swapped ? [...layers].reverse() : layers
 
@@ -157,48 +186,56 @@ export function AlignScreen() {
 
         <OpacitySlider value={opacity} onChange={setOpacity} label="Opacité du calque du dessus" />
 
-        <div className="flex gap-2 text-sm">
-          <button
-            type="button"
-            data-testid="swap-layers"
-            onClick={() => setSwapped((value) => !value)}
-            className="flex-1 rounded-xl border border-slate-600 py-3"
-          >
-            Permuter
-          </button>
-          <button
-            type="button"
-            data-testid="align-reset"
-            onClick={() => {
-              gestureRef.current = createGestureState(initial, shotSize, frame)
-              setTransform(initial)
-            }}
-            className="flex-1 rounded-xl border border-slate-600 py-3"
-          >
-            Remettre à zéro
-          </button>
-          <button
-            type="button"
-            data-testid="align-retake"
-            onClick={() => {
-              takePendingShot()
-              navigate(`/v/${id}/capture`, { replace: true })
-            }}
-            className="flex-1 rounded-xl border border-slate-600 py-3"
-          >
-            Reprendre
-          </button>
-        </div>
+        {/* Retirés pendant l enregistrement, et pas seulement grisés : « Reprendre »
+            consomme la photo en attente, or l attente de l encodage allonge la fenêtre
+            pendant laquelle une tape la ferait disparaître sous l écriture en cours. */}
+        {stage === 'idle' && (
+          <div className="flex gap-2 text-sm">
+            <button
+              type="button"
+              data-testid="swap-layers"
+              onClick={() => setSwapped((value) => !value)}
+              className="flex-1 rounded-xl border border-slate-600 py-3"
+            >
+              Permuter
+            </button>
+            <button
+              type="button"
+              data-testid="align-reset"
+              onClick={() => {
+                gestureRef.current = createGestureState(initial, shotSize, frame)
+                setTransform(initial)
+              }}
+              className="flex-1 rounded-xl border border-slate-600 py-3"
+            >
+              Remettre à zéro
+            </button>
+            <button
+              type="button"
+              data-testid="align-retake"
+              onClick={() => {
+                takePendingShot()
+                navigate(`/v/${id}/capture`, { replace: true })
+              }}
+              className="flex-1 rounded-xl border border-slate-600 py-3"
+            >
+              Reprendre
+            </button>
+          </div>
+        )}
 
-        <button
-          type="button"
-          data-testid="align-confirm"
-          disabled={busy}
-          onClick={onConfirm}
-          className="rounded-xl bg-sky-500 py-4 font-semibold text-slate-950 disabled:opacity-40"
-        >
-          Valider
-        </button>
+        {stage === 'idle' ? (
+          <button
+            type="button"
+            data-testid="align-confirm"
+            onClick={onConfirm}
+            className="rounded-xl bg-sky-500 py-4 font-semibold text-slate-950"
+          >
+            Valider
+          </button>
+        ) : (
+          <BusyStatus label={STAGE_LABEL[stage]} />
+        )}
 
         {error && <p className="rounded-lg bg-red-900/90 p-3 text-sm">{error}</p>}
       </div>
