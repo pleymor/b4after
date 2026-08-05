@@ -612,3 +612,107 @@ test('renderCrossfadeVideo anime réellement : les frames ne sont pas identiques
 
   expect(result.start).not.toEqual(result.end)
 })
+
+test('renderCrossfadeGif ne dépense aucune frame pour une coupe franche', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const input = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeGif(input('#ff0000'), input('#0000ff'), frame, {
+      transition: 'cut',
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    return { type: blob.type, trailer: bytes[bytes.length - 1], progress }
+  }, HELPERS)
+
+  expect(result.type).toBe('image/gif')
+  expect(result.trailer).toBe(0x3b)
+  // Deux paliers, aucune frame intermédiaire — contre 10 pour un fondu.
+  expect(result.progress.at(-1)).toEqual([2, 2])
+})
+
+test('renderCrossfadeGif balaie l image au lieu de la fondre', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { drawTransition, scaleInput } = await import('/src/render/crossfade.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 100 }
+    const input = (color) => {
+      const canvas = new OffscreenCanvas(100, 100)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 100)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    // On dessine directement l état à mi-course, seul moyen d observer la géométrie
+    // du balayage : à mix = 0.5, la moitié gauche est l après, la droite l avant.
+    // Un fondu, lui, donnerait un violet uniforme des deux côtés.
+    const canvas = new OffscreenCanvas(100, 100)
+    const ctx = canvas.getContext('2d')
+    const from = scaleInput(input('#ff0000'), 1)
+    const to = scaleInput(input('#0000ff'), 1)
+    drawTransition(ctx, from, to, { width: 100, height: 100 }, 0.5, 'wipe')
+
+    const blob = await renderCrossfadeGif(input('#ff0000'), input('#0000ff'), frame, {
+      transition: 'wipe',
+    })
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+
+    return {
+      left: window.__pixel(ctx, 25, 50),
+      right: window.__pixel(ctx, 75, 50),
+      header: String.fromCharCode(...bytes.slice(0, 6)),
+    }
+  }, HELPERS)
+
+  expect(result.header).toBe('GIF89a')
+  // Bleu franc à gauche, rouge franc à droite : ni l un ni l autre n est un mélange.
+  expect(result.left).toEqual([0, 0, 255])
+  expect(result.right).toEqual([255, 0, 0])
+})
+
+test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+      transition: 'cut',
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    return { type: blob.type, size: blob.size, progress }
+  }, HELPERS)
+
+  expect(result.type.startsWith('video/mp4')).toBe(true)
+  expect(result.size).toBeGreaterThan(1000)
+  // 3 allers-retours x 1 palier, aucune frame de transition.
+  expect(result.progress.at(-1)).toEqual([3, 3])
+})

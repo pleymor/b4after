@@ -1,5 +1,6 @@
+import type { Transition } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput } from './crossfade'
+import { drawTransition, scaleInput, transitionSteps } from './crossfade'
 import type { ComparisonInput } from './sideBySide'
 import type { GifRequest, GifResponse } from './gif.worker'
 import GifWorker from './gif.worker?worker'
@@ -14,21 +15,27 @@ function abortError(): DOMException {
 }
 
 /**
- * Fondu en `GIF_STEPS` frames de l avant vers l après, avec une pause aux deux
- * extrémités et une boucle infinie. Le retour se fait par coupe franche : doubler
- * les frames pour un fondu retour doublerait le poids du fichier sans rien apporter
- * à une comparaison avant/après.
+ * Transition (fondu, coupe ou balayage) de l avant vers l après, avec une pause aux
+ * deux extrémités et une boucle infinie. Le retour se fait par coupe franche quelle
+ * que soit la transition choisie : doubler les frames pour un retour animé
+ * doublerait le poids du fichier sans rien apporter à une comparaison avant/après.
  */
 export async function renderCrossfadeGif(
   before: ComparisonInput,
   after: ComparisonInput,
   frame: Size,
   options: {
+    transition?: Transition
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
 ): Promise<Blob> {
   if (options.signal?.aborted) throw abortError()
+
+  const transition = options.transition ?? 'crossfade'
+  // Deux paliers immobiles, plus les frames de transition : une coupe franche n en a
+  // aucune et se réduit donc à deux frames.
+  const steps = transitionSteps(transition) + 2
 
   // Contrairement à l export JPEG, c est la largeur seule qui borne le GIF : c est
   // elle qui détermine le poids du fichier au partage.
@@ -45,14 +52,14 @@ export async function renderCrossfadeGif(
   const frames: ArrayBuffer[] = []
   const delays: number[] = []
 
-  for (let step = 0; step < GIF_STEPS; step += 1) {
+  for (let step = 0; step < steps; step += 1) {
     if (options.signal?.aborted) throw abortError()
 
-    const mix = step / (GIF_STEPS - 1)
-    drawTransition(ctx, from, to, { width, height }, mix, 'crossfade')
+    const mix = step / (steps - 1)
+    drawTransition(ctx, from, to, { width, height }, mix, transition)
 
     frames.push(ctx.getImageData(0, 0, width, height).data.buffer as ArrayBuffer)
-    const isEdge = step === 0 || step === GIF_STEPS - 1
+    const isEdge = step === 0 || step === steps - 1
     delays.push(isEdge ? GIF_HOLD_MS : GIF_STEP_MS)
   }
 

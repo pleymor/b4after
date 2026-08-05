@@ -1,3 +1,4 @@
+import type { Transition } from '@/lib/exportOptions'
 import type { Size } from '@/types'
 import { drawTransition, scaleInput, transitionSteps } from './crossfade'
 import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
@@ -56,6 +57,7 @@ export async function renderCrossfadeVideo(
   after: ComparisonInput,
   frame: Size,
   options: {
+    transition?: Transition
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -71,7 +73,8 @@ export async function renderCrossfadeVideo(
 
   const from = scaleInput(before, widthFactor)
   const to = scaleInput(after, widthFactor)
-  const fadeSteps = transitionSteps('crossfade')
+  const transition = options.transition ?? 'crossfade'
+  const fadeSteps = transitionSteps(transition)
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -133,7 +136,7 @@ export async function renderCrossfadeVideo(
       for (let rep = 0; rep < REPS; rep += 1) {
         const target = 1 - mix
 
-        drawTransition(ctx, from, to, { width, height }, mix, 'crossfade')
+        drawTransition(ctx, from, to, { width, height }, mix, transition)
         await wait(GIF_HOLD_MS, options.signal)
         done += 1
         options.onProgress?.(done, total)
@@ -145,7 +148,7 @@ export async function renderCrossfadeVideo(
             to,
             { width, height },
             mix + (target - mix) * (step / fadeSteps),
-            'crossfade',
+            transition,
           )
           await wait(GIF_STEP_MS, options.signal)
           done += 1
