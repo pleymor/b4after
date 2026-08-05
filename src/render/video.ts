@@ -1,6 +1,6 @@
 import type { Size } from '@/types'
-import { drawShot } from './drawShot'
-import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS, GIF_STEPS } from './gif'
+import { drawTransition, scaleInput, transitionSteps } from './crossfade'
+import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
 // Même borne que le GIF (voir gif.ts) : c est la largeur qui fixe le poids du
@@ -14,10 +14,6 @@ const VIDEO_MIME_CANDIDATES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
 // qu une seule lecture ressemble à un instantané figé plutôt qu à une animation.
 // En jouer trois, en va-et-vient, porte la durée totale à environ 3,4 s.
 const REPS = 3
-
-// Le fondu du GIF compte GIF_STEPS frames dont deux sont les paliers immobiles
-// (avant, après) : il reste GIF_STEPS - 2 frames de transition.
-const FADE_STEPS = GIF_STEPS - 2
 
 function abortError(): DOMException {
   return new DOMException('Export annulé', 'AbortError')
@@ -73,21 +69,9 @@ export async function renderCrossfadeVideo(
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 
-  const scaled = (input: ComparisonInput) => ({
-    source: input.source,
-    transform: {
-      ...input.transform,
-      tx: input.transform.tx * widthFactor,
-      ty: input.transform.ty * widthFactor,
-    },
-    shot: {
-      width: input.shot.width * widthFactor,
-      height: input.shot.height * widthFactor,
-    },
-  })
-
-  const from = scaled(before)
-  const to = scaled(after)
+  const from = scaleInput(before, widthFactor)
+  const to = scaleInput(after, widthFactor)
+  const fadeSteps = transitionSteps('crossfade')
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -98,17 +82,6 @@ export async function renderCrossfadeVideo(
   const maybeCtx = canvas.getContext('2d')
   if (!maybeCtx) throw new Error('Contexte 2D indisponible')
   const ctx = maybeCtx
-
-  function draw(mix: number) {
-    ctx.clearRect(0, 0, width, height)
-    ctx.globalAlpha = 1
-    drawShot(ctx, from.source, from.transform, { width, height }, from.shot)
-    if (mix > 0) {
-      ctx.globalAlpha = mix
-      drawShot(ctx, to.source, to.transform, { width, height }, to.shot)
-      ctx.globalAlpha = 1
-    }
-  }
 
   // Un taux explicite plutôt que la capture « au repaint » par défaut : sans lui
   // la cadence dépend du navigateur, ce qui marche aujourd hui parce que nos
@@ -123,7 +96,7 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  const total = REPS * (1 + FADE_STEPS)
+  const total = REPS * (1 + fadeSteps)
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -160,13 +133,20 @@ export async function renderCrossfadeVideo(
       for (let rep = 0; rep < REPS; rep += 1) {
         const target = 1 - mix
 
-        draw(mix)
+        drawTransition(ctx, from, to, { width, height }, mix, 'crossfade')
         await wait(GIF_HOLD_MS, options.signal)
         done += 1
         options.onProgress?.(done, total)
 
-        for (let step = 1; step <= FADE_STEPS; step += 1) {
-          draw(mix + (target - mix) * (step / FADE_STEPS))
+        for (let step = 1; step <= fadeSteps; step += 1) {
+          drawTransition(
+            ctx,
+            from,
+            to,
+            { width, height },
+            mix + (target - mix) * (step / fadeSteps),
+            'crossfade',
+          )
           await wait(GIF_STEP_MS, options.signal)
           done += 1
           options.onProgress?.(done, total)

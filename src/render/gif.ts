@@ -1,5 +1,5 @@
 import type { Size } from '@/types'
-import { drawShot } from './drawShot'
+import { drawTransition, scaleInput } from './crossfade'
 import type { ComparisonInput } from './sideBySide'
 import type { GifRequest, GifResponse } from './gif.worker'
 import GifWorker from './gif.worker?worker'
@@ -40,21 +40,8 @@ export async function renderCrossfadeGif(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Contexte 2D indisponible')
 
-  const scaled = (input: ComparisonInput) => ({
-    source: input.source,
-    transform: {
-      ...input.transform,
-      tx: input.transform.tx * widthFactor,
-      ty: input.transform.ty * widthFactor,
-    },
-    shot: {
-      width: input.shot.width * widthFactor,
-      height: input.shot.height * widthFactor,
-    },
-  })
-
-  const from = scaled(before)
-  const to = scaled(after)
+  const from = scaleInput(before, widthFactor)
+  const to = scaleInput(after, widthFactor)
   const frames: ArrayBuffer[] = []
   const delays: number[] = []
 
@@ -62,14 +49,7 @@ export async function renderCrossfadeGif(
     if (options.signal?.aborted) throw abortError()
 
     const mix = step / (GIF_STEPS - 1)
-    ctx.clearRect(0, 0, width, height)
-    ctx.globalAlpha = 1
-    drawShot(ctx, from.source, from.transform, { width, height }, from.shot)
-    if (mix > 0) {
-      ctx.globalAlpha = mix
-      drawShot(ctx, to.source, to.transform, { width, height }, to.shot)
-      ctx.globalAlpha = 1
-    }
+    drawTransition(ctx, from, to, { width, height }, mix, 'crossfade')
 
     frames.push(ctx.getImageData(0, 0, width, height).data.buffer as ArrayBuffer)
     const isEdge = step === 0 || step === GIF_STEPS - 1
