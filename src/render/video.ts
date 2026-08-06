@@ -1,6 +1,14 @@
 import type { Pace, Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, targetWidth, type ScaledInput } from './crossfade'
+import {
+  bounceIndex,
+  decodeScaled,
+  drawSingle,
+  drawTransition,
+  scaleInput,
+  targetWidth,
+  type DecodedInput,
+} from './crossfade'
 import { GIF_MAX_WIDTH } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
@@ -66,8 +74,8 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
  */
 function animateFade(
   ctx: CanvasRenderingContext2D,
-  from: ScaledInput,
-  to: ScaledInput,
+  from: DecodedInput,
+  to: DecodedInput,
   size: Size,
   mixStart: number,
   mixEnd: number,
@@ -118,18 +126,26 @@ function animateFade(
 }
 
 /**
- * Transition (fondu, coupe ou balayage) de l avant vers l après, en va-et-vient
- * (avant → après → avant → …), dessinée en temps réel sur un canevas détaché, capturée
- * et encodée par `MediaRecorder`. Rejouée le nombre de fois spécifié par `reps` pour
- * qu une seule lecture se lise déjà comme une animation plutôt qu un clignement.
+ * Transition (fondu, coupe ou balayage) qui parcourt toute la série en va-et-vient
+ * (photo 1 → photo 2 → … → dernière → … → photo 1 → …), dessinée en temps réel sur un
+ * canevas détaché, capturée et encodée par `MediaRecorder`.
+ *
+ * `reps` compte des demi-passes, comme avant : sur une comparaison à deux photos, une
+ * demi-passe est un aller-retour complet (l unique intervalle est parcouru une fois),
+ * donc `reps` défauts et sorties restent identiques à l ancien modèle avant/après. Sur
+ * une série de N photos, une demi-passe traverse ses N-1 intervalles : `reps` (impair
+ * dans les trois valeurs proposées) garantit que la vidéo se termine toujours sur la
+ * dernière photo, quelle que soit la longueur de la série (voir `bounceIndex`).
+ *
+ * Décode une photo à la fois, au plus deux bitmaps vivants simultanément — celle qu on
+ * quitte et celle qu on rejoint — jamais toute la série (voir la spec, § Mémoire).
  *
  * Le fondu suit le temps écoulé (voir `animateFade`) et non un nombre fixe de paliers ;
  * `pace` choisit sa durée. Le palier, lui, dure toujours `VIDEO_HOLD_MS` quel que soit
  * le rythme choisi.
  */
 export async function renderCrossfadeVideo(
-  before: ComparisonInput,
-  after: ComparisonInput,
+  inputs: ComparisonInput[],
   frame: Size,
   options: {
     transition?: Transition
@@ -150,8 +166,8 @@ export async function renderCrossfadeVideo(
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 
-  const from = scaleInput(before, widthFactor)
-  const to = scaleInput(after, widthFactor)
+  const scaled = inputs.map((input) => scaleInput(input, widthFactor))
+  const count = inputs.length
   const transition = options.transition ?? 'crossfade'
   const pace = options.pace ?? 'normal'
 
@@ -161,10 +177,10 @@ export async function renderCrossfadeVideo(
   // lui, reste à VIDEO_HOLD_MS pour les trois transitions.
   const fadeMs = transition === 'cut' ? 0 : FADE_DURATION_MS[pace]
 
-  // Trois allers-retours par défaut, soit environ 5,7 s à rythme normal : un seul aller
-  // ne dure que le temps d'une prise plus un fondu et se lit comme un instantané figé
-  // plutôt que comme une animation.
+  // Trois demi-passes par défaut : voir le commentaire de la fonction pour la
+  // correspondance exacte avec l ancien modèle à deux photos.
   const reps = options.reps ?? 3
+  const totalSteps = reps * (count - 1)
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -189,13 +205,14 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  // Un aller-retour vaut palier + fondu. Pour une coupe franche (`fadeMs === 0`), la
-  // boucle ne dessine que le palier de *départ* de chaque aller-retour ; l état atteint
-  // après le dernier aller-retour n est donc jamais dessiné par la boucle elle-même
-  // (voir plus bas). D où le palier supplémentaire : sans lui la barre de progression
-  // n atteindrait jamais 100 %. `crossfade` et `wipe` n en ont pas besoin : leur
-  // dernière frame de fondu dessine déjà l état final.
-  const totalMs = fadeMs === 0 ? reps * VIDEO_HOLD_MS + VIDEO_HOLD_MS : reps * (VIDEO_HOLD_MS + fadeMs)
+  // Un pas vaut palier + fondu. Pour une coupe franche (`fadeMs === 0`), la boucle ne
+  // dessine que le palier de *départ* de chaque pas ; l état atteint après le dernier
+  // pas n est donc jamais dessiné par la boucle elle-même (voir plus bas). D où le
+  // palier supplémentaire : sans lui la barre de progression n atteindrait jamais
+  // 100 %. `crossfade` et `wipe` n en ont pas besoin : leur dernière frame de fondu
+  // dessine déjà l état final.
+  const totalMs =
+    fadeMs === 0 ? totalSteps * VIDEO_HOLD_MS + VIDEO_HOLD_MS : totalSteps * (VIDEO_HOLD_MS + fadeMs)
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -227,48 +244,62 @@ export async function renderCrossfadeVideo(
 
     recorder.start()
     ;(async () => {
-      // Temps de vidéo déjà couvert par les allers-retours précédents : la progression
-      // rapporte ce temps écoulé à `totalMs`, pas un compte de paliers franchis, pour
-      // rester une mesure temporelle fidèle même quand un fondu dure des secondes.
+      // Temps de vidéo déjà couvert par le pas précédent : la progression rapporte ce
+      // temps écoulé à `totalMs`, pas un compte de pas franchis, pour rester une
+      // mesure temporelle fidèle même quand un fondu dure des secondes.
       let elapsed = 0
-      let mix = 0
-      for (let rep = 0; rep < reps; rep += 1) {
-        const target = 1 - mix
+      let current = await decodeScaled(scaled[0])
+      try {
+        for (let step = 0; step < totalSteps; step += 1) {
+          const nextIndex = bounceIndex(step + 1, count)
+          const next = await decodeScaled(scaled[nextIndex])
+          try {
+            drawTransition(ctx, current, next, { width, height }, 0, transition)
+            await wait(VIDEO_HOLD_MS, options.signal)
+            elapsed += VIDEO_HOLD_MS
+            options.onProgress?.(elapsed, totalMs)
 
-        drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(VIDEO_HOLD_MS, options.signal)
-        elapsed += VIDEO_HOLD_MS
-        options.onProgress?.(elapsed, totalMs)
-
-        if (fadeMs > 0) {
-          const base = elapsed
-          await animateFade(
-            ctx,
-            from,
-            to,
-            { width, height },
-            mix,
-            target,
-            transition,
-            fadeMs,
-            options.signal,
-            (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
-          )
-          elapsed = base + fadeMs
+            if (fadeMs > 0) {
+              const base = elapsed
+              await animateFade(
+                ctx,
+                current,
+                next,
+                { width, height },
+                0,
+                1,
+                transition,
+                fadeMs,
+                options.signal,
+                (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
+              )
+              elapsed = base + fadeMs
+            }
+          } catch (error) {
+            // `current` est fermé par le `finally` ci-dessous : sur cette branche
+            // d erreur (annulation en cours de pas), c est `next` qu il faut fermer
+            // nous-mêmes, faute de quoi il ne serait jamais réassigné à `current` et
+            // resterait ouvert.
+            next.bitmap.close()
+            throw error
+          } finally {
+            current.bitmap.close()
+          }
+          current = next
         }
 
-        mix = target
-      }
-
-      // Coupe franche : `fadeMs` vaut 0, donc la boucle ci-dessus n a dessiné que les
-      // paliers de *départ* de chaque aller-retour, jamais l état atteint après le
-      // dernier. Sans ce palier, la vidéo s arrêterait sur le dernier avant affiché et
-      // ne montrerait jamais l après, même si `mix` vaut bien `target` à ce point.
-      if (fadeMs === 0) {
-        drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(VIDEO_HOLD_MS, options.signal)
-        elapsed += VIDEO_HOLD_MS
-        options.onProgress?.(elapsed, totalMs)
+        // Coupe franche : `fadeMs` vaut 0, donc la boucle ci-dessus n a dessiné que les
+        // paliers de *départ* de chaque pas, jamais l état atteint après le dernier.
+        // Sans ce palier, la vidéo s arrêterait sur l avant-dernière photo affichée et
+        // ne montrerait jamais la dernière.
+        if (fadeMs === 0) {
+          drawSingle(ctx, current, { width, height })
+          await wait(VIDEO_HOLD_MS, options.signal)
+          elapsed += VIDEO_HOLD_MS
+          options.onProgress?.(elapsed, totalMs)
+        }
+      } finally {
+        current.bitmap.close()
       }
 
       stopRecorder()

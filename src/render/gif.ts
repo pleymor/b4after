@@ -1,6 +1,6 @@
 import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
+import { decodeScaled, drawSingle, drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
 import type { ComparisonInput } from './sideBySide'
 import type { GifRequest, GifResponse } from './gif.worker'
 import GifWorker from './gif.worker?worker'
@@ -24,14 +24,17 @@ function abortError(): DOMException {
 }
 
 /**
- * Transition (fondu, coupe ou balayage) de l avant vers l après, avec une pause aux
- * deux extrémités et une boucle infinie. Le retour se fait par coupe franche quelle
- * que soit la transition choisie : doubler les frames pour un retour animé
- * doublerait le poids du fichier sans rien apporter à une comparaison avant/après.
+ * Parcourt toute la série dans l ordre : palier sur la photo 1, transition, palier
+ * sur la photo 2, … jusqu à la dernière, puis boucle à l infini. Le retour au début se
+ * fait par coupe franche quelle que soit la transition choisie : doubler les frames
+ * pour un retour animé doublerait le poids du fichier sans rien apporter à une
+ * comparaison avant/après (voir la spec de comparaison de série).
+ *
+ * Décode une photo à la fois : au plus deux bitmaps vivants en même temps (celui
+ * qu on quitte et celui qu on rejoint), jamais toute la série (voir la spec, § Mémoire).
  */
 export async function renderCrossfadeGif(
-  before: ComparisonInput,
-  after: ComparisonInput,
+  inputs: ComparisonInput[],
   frame: Size,
   options: {
     transition?: Transition
@@ -43,9 +46,12 @@ export async function renderCrossfadeGif(
   if (options.signal?.aborted) throw abortError()
 
   const transition = options.transition ?? 'crossfade'
-  // Deux paliers immobiles, plus les frames de transition : une coupe franche n en a
-  // aucune et se réduit donc à deux frames.
-  const steps = transitionSteps(transition) + 2
+  // Frames de transition entre deux paliers immobiles : une coupe franche n en a
+  // aucune.
+  const innerSteps = transitionSteps(transition)
+  const gaps = inputs.length - 1
+  // Un palier par photo, plus les frames de transition de chaque intervalle.
+  const totalFrames = 1 + gaps * (innerSteps + 1)
 
   // `GIF_WIDTH_CAP` prime même sur `'full'` : voir sa déclaration plus haut. Et le
   // plafond n est jamais franchi vers le haut, dans un sens comme dans l autre : un
@@ -59,20 +65,51 @@ export async function renderCrossfadeGif(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Contexte 2D indisponible')
 
-  const from = scaleInput(before, widthFactor)
-  const to = scaleInput(after, widthFactor)
+  const scaled = inputs.map((input) => scaleInput(input, widthFactor))
   const frames: ArrayBuffer[] = []
   const delays: number[] = []
 
-  for (let step = 0; step < steps; step += 1) {
+  // `isHold` : un palier sur une photo dure `GIF_HOLD_MS`, une frame de transition
+  // seulement `GIF_STEP_MS`.
+  function pushFrame(isHold: boolean) {
+    frames.push(ctx!.getImageData(0, 0, width, height).data.buffer as ArrayBuffer)
+    delays.push(isHold ? GIF_HOLD_MS : GIF_STEP_MS)
+    options.onProgress?.(frames.length, totalFrames)
+  }
+
+  let from = await decodeScaled(scaled[0])
+  try {
     if (options.signal?.aborted) throw abortError()
+    drawSingle(ctx, from, { width, height })
+    pushFrame(true)
 
-    const mix = step / (steps - 1)
-    drawTransition(ctx, from, to, { width, height }, mix, transition)
-
-    frames.push(ctx.getImageData(0, 0, width, height).data.buffer as ArrayBuffer)
-    const isEdge = step === 0 || step === steps - 1
-    delays.push(isEdge ? GIF_HOLD_MS : GIF_STEP_MS)
+    for (let gap = 0; gap < gaps; gap += 1) {
+      if (options.signal?.aborted) throw abortError()
+      const to = await decodeScaled(scaled[gap + 1])
+      try {
+        for (let step = 1; step <= innerSteps; step += 1) {
+          if (options.signal?.aborted) throw abortError()
+          const mix = step / (innerSteps + 1)
+          drawTransition(ctx, from, to, { width, height }, mix, transition)
+          pushFrame(false)
+        }
+        // Palier sur la photo suivante : ferme l intervalle qui vient de se jouer, et
+        // sert aussi de départ au suivant — on ne le dessine donc qu une fois.
+        drawTransition(ctx, from, to, { width, height }, 1, transition)
+        pushFrame(true)
+      } catch (error) {
+        // `from` est fermé par le `finally` ci-dessous : sur cette branche d erreur,
+        // c est `to` qu il faut fermer nous-mêmes, faute de quoi il ne serait jamais
+        // réassigné à `from` et resterait ouvert.
+        to.bitmap.close()
+        throw error
+      } finally {
+        from.bitmap.close()
+      }
+      from = to
+    }
+  } finally {
+    from.bitmap.close()
   }
 
   return encodeInWorker({ frames, delays, width, height }, options)

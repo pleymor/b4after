@@ -348,11 +348,12 @@ test('revenir à l écran de calage sans photo en attente renvoie à la série',
   await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
 })
 
-test('présélectionne la plus ancienne et la plus récente', async ({ page }) => {
+test("l écran de détail ne porte plus de boutons radio, et « Comparer » mène à toute la série", async ({
+  page,
+}) => {
   const { viewpointId } = await seed(page, 'Façade nord')
-  // Deux photos de plus : avec trois clichés, « la plus ancienne et la plus récente »
-  // se distingue de « les deux premières », ce qu un fixture à deux photos ne
-  // permettait pas.
+  // Deux photos de plus : de quoi vérifier qu aucune ligne, pas même celle du milieu,
+  // ne porte de sélection avant/après.
   await page.evaluate(async (id) => {
     const { addShot } = await import('/src/db/shots.ts')
     const { IDENTITY } = await import('/src/align/transform.ts')
@@ -370,53 +371,14 @@ test('présélectionne la plus ancienne et la plus récente', async ({ page }) =
   await page.goto(`/v/${viewpointId}`)
   await expect(page.getByTestId('shot-item')).toHaveCount(3)
 
-  const items = page.getByTestId('shot-item')
-  await expect(items.nth(0).getByTestId('select-before')).toBeChecked()
-  await expect(items.nth(2).getByTestId('select-after')).toBeChecked()
-  // La photo du milieu n est ni l avant ni l après.
-  await expect(items.nth(1).getByTestId('select-before')).not.toBeChecked()
-  await expect(items.nth(1).getByTestId('select-after')).not.toBeChecked()
+  // La demande explicite du spec de comparaison de série : plus de boutons radio,
+  // sur aucune ligne.
+  await expect(page.getByTestId('select-before')).toHaveCount(0)
+  await expect(page.getByTestId('select-after')).toHaveCount(0)
 
   await page.getByTestId('compare').click()
-  await expect(page).toHaveURL(/\/compare\?before=.+&after=.+/)
-})
-
-test('la sélection manuelle survit à la suppression d une autre photo', async ({ page }) => {
-  const { viewpointId } = await seed(page, 'Façade nord')
-  // Deux photos de plus, pour disposer d une photo « du milieu » distincte de l avant
-  // et de l après par défaut.
-  await page.evaluate(async (id) => {
-    const { addShot } = await import('/src/db/shots.ts')
-    const { IDENTITY } = await import('/src/align/transform.ts')
-    const canvas = new OffscreenCanvas(300, 400)
-    const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = '#0000ff'
-    ctx.fillRect(0, 0, 300, 400)
-    const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
-    for (let i = 0; i < 2; i += 1) {
-      await new Promise((r) => setTimeout(r, 2))
-      await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
-    }
-  }, viewpointId)
-
-  await page.goto(`/v/${viewpointId}`)
-  const items = page.getByTestId('shot-item')
-  await expect(items).toHaveCount(3)
-
-  // On choisit la photo du milieu comme « après », à la place de la plus récente
-  // présélectionnée par défaut.
-  await items.nth(1).getByTestId('select-after').check()
-  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
-
-  // On supprime une autre photo que celles sélectionnées : la plus récente.
-  page.once('dialog', (dialog) => dialog.accept())
-  await items.nth(2).getByTestId('delete-shot').click()
-  await expect(items).toHaveCount(2)
-
-  // La sélection — avant = la plus ancienne, après = celle du milieu — doit avoir
-  // survécu : ce n est pas elle qui a disparu.
-  await expect(items.nth(0).getByTestId('select-before')).toBeChecked()
-  await expect(items.nth(1).getByTestId('select-after')).toBeChecked()
+  // Plus de paramètres de requête : la comparaison porte sur toute la série.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/compare$`))
 })
 
 test('refuse de comparer une seule photo', async ({ page }) => {
@@ -486,11 +448,56 @@ async function seedPair(page: import('@playwright/test').Page) {
   return { viewpointId, ...ids }
 }
 
-test('exporte une image côte-à-côte', async ({ page }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+test('le curseur temporel parcourt toute la série, pas seulement un couple', async ({ page }) => {
+  // Trois photos de couleurs franches et distinctes : rouge, vert, bleu. Le test
+  // « la comparaison porte sur toute la série » du spec — le curseur doit pouvoir
+  // atteindre chacune, pas seulement les deux premières.
+  const { viewpointId } = await seed(page, 'Façade nord') // première photo, rouge
+  await page.evaluate(async (id) => {
+    const { addShot } = await import('/src/db/shots.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+    for (const color of ['#00ff00', '#0000ff']) {
+      await new Promise((r) => setTimeout(r, 2))
+      const canvas = new OffscreenCanvas(300, 400)
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 300, 400)
+      const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+      await addShot({ viewpointId: id, blob, thumbBlob: blob, width: 300, height: 400, transform: IDENTITY })
+    }
+  }, viewpointId)
 
-  await expect(page.getByTestId('reveal-slider')).toBeVisible()
+  await page.goto(`/v/${viewpointId}/compare`)
+  const scrubberInput = page.getByTestId('series-scrubber-input')
+  await expect(scrubberInput).toBeVisible()
+  // Bornes 0 à N-1 pour une série de trois photos.
+  await expect(scrubberInput).toHaveAttribute('max', '2')
+
+  const canvas = page.getByTestId('series-scrubber').locator('canvas')
+  const sample = () =>
+    canvas.evaluate((el: HTMLCanvasElement) => {
+      const ctx = el.getContext('2d')!
+      const { data } = ctx.getImageData(Math.floor(el.width / 2), Math.floor(el.height / 2), 1, 1)
+      return Array.from(data).slice(0, 3)
+    })
+
+  // Des seuils, pas une égalité stricte : les photos sont stockées en JPEG, avec son
+  // bruit de quantification habituel (voir les autres tests de rendu du dépôt).
+  await scrubberInput.fill('0')
+  await expect.poll(() => sample().then((p) => p[0])).toBeGreaterThan(200)
+
+  await scrubberInput.fill('1')
+  await expect.poll(() => sample().then((p) => p[1])).toBeGreaterThan(200)
+
+  await scrubberInput.fill('2')
+  await expect.poll(() => sample().then((p) => p[2])).toBeGreaterThan(200)
+})
+
+test('exporte une image côte-à-côte', async ({ page }) => {
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
+
+  await expect(page.getByTestId('series-scrubber')).toBeVisible()
 
   await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')
@@ -501,8 +508,8 @@ test('exporte une image côte-à-côte', async ({ page }) => {
 })
 
 test('exporte une vidéo animée avec une progression', async ({ page }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
@@ -522,8 +529,8 @@ test('replie sur le GIF quand aucun format vidéo n est pris en charge', async (
     MediaRecorder.isTypeSupported = () => false
   })
 
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
@@ -549,8 +556,8 @@ test("un échec d'export animé affiche un message visible, distinct du succès"
     }
   })
 
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-video-options').click()
   await page.getByTestId('export-gif').click()
@@ -568,8 +575,8 @@ test("un échec d'export animé affiche un message visible, distinct du succès"
 test("fermer la feuille pendant l'encodage n'interrompt ni ne cache la progression", async ({
   page,
 }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-video-options').click()
   await page.getByTestId('export-gif').click()
@@ -589,8 +596,8 @@ test("fermer la feuille pendant l'encodage n'interrompt ni ne cache la progressi
 })
 
 test('mémorise les réglages d export d une visite à l autre', async ({ page }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  const url = `/v/${viewpointId}/compare?before=${before}&after=${after}`
+  const { viewpointId } = await seedPair(page)
+  const url = `/v/${viewpointId}/compare`
   await page.goto(url)
 
   await page.getByTestId('open-image-options').click()
@@ -613,8 +620,8 @@ test('mémorise les réglages d export d une visite à l autre', async ({ page }
 test('un aperçu réel accompagne la feuille image, et le curseur de bandeau en change la hauteur', async ({
   page,
 }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-image-options').click()
   const preview = page.getByTestId('image-preview')
@@ -639,8 +646,8 @@ test('un aperçu réel accompagne la feuille image, et le curseur de bandeau en 
 })
 
 test('le curseur de taille du bandeau est désactivé sans bandeau', async ({ page }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-image-options').click()
   await expect(page.getByTestId('stamp-scale')).toBeEnabled()
@@ -650,11 +657,34 @@ test('le curseur de taille du bandeau est désactivé sans bandeau', async ({ pa
   await expect(page.getByTestId('stamp-scale')).toBeDisabled()
 })
 
+test('la feuille image gagne une ligne « Largeur », mémorisée comme les autres réglages', async ({
+  page,
+}) => {
+  const { viewpointId } = await seedPair(page)
+  const url = `/v/${viewpointId}/compare`
+  await page.goto(url)
+
+  await page.getByTestId('open-image-options').click()
+  const widthRow = page.getByTestId('image-width')
+  await expect(widthRow).toBeVisible()
+  // Défaut « Haute » (2048 px), pendant exact de la vidéo à sa valeur par défaut.
+  await expect(widthRow.getByRole('radio', { name: 'Haute' })).toHaveAttribute('aria-checked', 'true')
+
+  await widthRow.getByRole('radio', { name: 'Maximale' }).click()
+  await page.getByTestId('close-sheet').click()
+
+  await page.goto(url)
+  await page.getByTestId('open-image-options').click()
+  await expect(
+    page.getByTestId('image-width').getByRole('radio', { name: 'Maximale' }),
+  ).toHaveAttribute('aria-checked', 'true')
+})
+
 test('la ligne « Rythme » est désactivée en coupe franche, faute de fondu à accélérer', async ({
   page,
 }) => {
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
 
   await page.getByTestId('open-video-options').click()
   const paceRadio = page.getByTestId('video-pace').getByRole('radio', { name: 'Lent' })
@@ -675,9 +705,9 @@ test('la comparaison ne défile pas sur un écran de téléphone', async ({ page
   // presque toute la hauteur utile.
   await page.setViewportSize({ width: 390, height: 664 })
 
-  const { viewpointId, before, after } = await seedPair(page)
-  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
-  const slider = page.getByTestId('reveal-slider')
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
+  const slider = page.getByTestId('series-scrubber')
   await expect(slider).toBeVisible()
 
   // Le motif du problème d origine : les commandes d export sont atteignables sans
@@ -717,9 +747,18 @@ test('la comparaison ne défile pas sur un écran de téléphone', async ({ page
   expect(canvasSize).toEqual({ width: 300, height: 400 })
 })
 
-test('signale une comparaison introuvable', async ({ page }) => {
+test('signale une comparaison introuvable sur une série de moins de deux photos', async ({
+  page,
+}) => {
+  // Une seule photo : rien à comparer, même en atteignant l URL directement (le
+  // bouton « Comparer » de l écran de détail est déjà désactivé dans ce cas).
   const { viewpointId } = await seed(page, 'Façade nord')
-  await page.goto(`/v/${viewpointId}/compare?before=inconnu&after=inconnu`)
+  await page.goto(`/v/${viewpointId}/compare`)
+  await expect(page.getByTestId('export-status')).toContainText('introuvable')
+})
+
+test('signale une comparaison introuvable sur un point de vue inexistant', async ({ page }) => {
+  await page.goto('/v/identifiant-inexistant/compare')
   await expect(page.getByTestId('export-status')).toContainText('introuvable')
 })
 
@@ -777,7 +816,7 @@ test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({
 
   // Comparaison et export.
   await page.getByTestId('compare').click()
-  await expect(page.getByTestId('reveal-slider')).toBeVisible()
+  await expect(page.getByTestId('series-scrubber')).toBeVisible()
 
   await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')

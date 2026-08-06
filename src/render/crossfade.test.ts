@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { IDENTITY } from '@/align/transform'
-import { scaleInput, targetWidth, transitionSteps } from './crossfade'
+import { bounceIndex, scaleInput, targetWidth, transitionSteps } from './crossfade'
 
 describe('transitionSteps', () => {
   it('garde le rythme du fondu actuel', () => {
@@ -21,10 +21,10 @@ describe('transitionSteps', () => {
 })
 
 describe('scaleInput', () => {
-  it('met la translation et les dimensions à l échelle, pas la source', () => {
-    const source = {} as never
+  it('met la translation et les dimensions à l échelle, pas le blob', () => {
+    const blob = {} as never
     const input = {
-      source,
+      blob,
       transform: { ...IDENTITY, tx: 100, ty: -40 },
       takenAt: 123,
       shot: { width: 1200, height: 1600 },
@@ -34,10 +34,28 @@ describe('scaleInput', () => {
 
     expect(scaled.transform).toEqual({ ...IDENTITY, tx: 50, ty: -20 })
     expect(scaled.shot).toEqual({ width: 600, height: 800 })
-    expect(scaled.source).toBe(source)
+    expect(scaled.blob).toBe(blob)
     // `takenAt` ne sert qu au bandeau de l image côte-à-côte : il n a rien à faire
     // dans une entrée de rendu animé.
     expect(scaled).not.toHaveProperty('takenAt')
+  })
+})
+
+describe('bounceIndex', () => {
+  it('alterne entre 0 et 1 pour deux photos, comme l avant/après d origine', () => {
+    expect([0, 1, 2, 3, 4].map((step) => bounceIndex(step, 2))).toEqual([0, 1, 0, 1, 0])
+  })
+
+  it('fait un aller-retour complet sur une série de trois photos', () => {
+    // Un aller (0→1→2) puis un retour (2→1→0), comme un rythme « Moyen » qui jouerait
+    // deux demi-passes au lieu d une seule alternance.
+    expect([0, 1, 2, 3, 4, 5, 6].map((step) => bounceIndex(step, 3))).toEqual([
+      0, 1, 2, 1, 0, 1, 2,
+    ])
+  })
+
+  it('reste à 0 pour une série d une seule photo', () => {
+    expect(bounceIndex(5, 1)).toBe(0)
   })
 })
 
