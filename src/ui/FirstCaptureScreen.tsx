@@ -2,10 +2,12 @@ import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { IDENTITY } from '@/align/transform'
 import { useCamera, type CapturedFrame } from '@/camera/useCamera'
+import { importPhoto } from '@/capture/importPhoto'
 import { isQuotaError } from '@/db/storage'
 import { createViewpointWithFirstShot, nextViewpointName } from '@/db/viewpoints'
 import { BusyStatus } from './components/BusyStatus'
 import { CameraDeniedNotice } from './components/CameraDeniedNotice'
+import { PickPhotoButton } from './components/PickPhotoButton'
 import { Screen } from './components/Screen'
 import { ShotCanvas } from './components/ShotCanvas'
 
@@ -173,28 +175,43 @@ function CaptureStage({ onCaptured }: { onCaptured: (frame: CapturedFrame) => vo
     }
   }
 
-  if (status === 'denied' || status === 'unavailable') {
-    return <CameraDeniedNotice status={status} onRetry={retry} />
+  async function onPick(file: File) {
+    setError(null)
+    try {
+      onCaptured(await importPhoto(file))
+    } catch {
+      setError("La photo n'a pas pu être importée. Réessayez.")
+    }
   }
 
   return (
     <div className="relative h-full">
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        className="h-full w-full bg-black object-contain"
-      />
+      {status === 'denied' || status === 'unavailable' ? (
+        <CameraDeniedNotice status={status} onRetry={retry} />
+      ) : (
+        <>
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            autoPlay
+            className="h-full w-full bg-black object-contain"
+          />
 
-      <button
-        type="button"
-        data-testid="shutter"
-        disabled={status !== 'ready'}
-        onClick={onShutter}
-        className="absolute bottom-6 left-1/2 size-20 -translate-x-1/2 rounded-full border-4 border-white bg-white/30 disabled:opacity-40"
-        aria-label="Prendre la photo"
-      />
+          <button
+            type="button"
+            data-testid="shutter"
+            disabled={status !== 'ready'}
+            onClick={onShutter}
+            className="absolute bottom-6 left-1/2 size-20 -translate-x-1/2 rounded-full border-4 border-white bg-white/30 disabled:opacity-40"
+            aria-label="Prendre la photo"
+          />
+        </>
+      )}
+
+      {/* Le bouton d import reste actionnable même quand la caméra est refusée ou
+          indisponible : c est alors le seul moyen d alimenter l app. */}
+      <PickPhotoButton onPick={onPick} />
 
       {error && (
         <p className="absolute inset-x-4 top-4 rounded-lg bg-red-900/90 p-3 text-sm">{error}</p>

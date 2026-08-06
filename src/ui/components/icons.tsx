@@ -33,3 +33,14 @@ export function PlayIcon() {
     </svg>
   )
 }
+
+/** Un cadre avec une montagne : la galerie du téléphone, pour choisir une photo existante. */
+export function GalleryIcon() {
+  return (
+    <svg {...COMMON}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5-4 4-2-2-5 5" />
+    </svg>
+  )
+}

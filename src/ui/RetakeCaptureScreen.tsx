@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useCamera } from '@/camera/useCamera'
+import { importPhoto } from '@/capture/importPhoto'
 import { setPendingShot } from '@/capture/pendingShot'
 import { getViewpoint } from '@/db/viewpoints'
 import { useBitmap } from '@/hooks/useBitmap'
@@ -9,6 +10,7 @@ import { needsRotationHint } from '@/lib/orientation'
 import type { Shot, Size, Viewpoint } from '@/types'
 import { CameraDeniedNotice } from './components/CameraDeniedNotice'
 import { OpacitySlider } from './components/OpacitySlider'
+import { PickPhotoButton } from './components/PickPhotoButton'
 import { Screen } from './components/Screen'
 import { ShotCanvas } from './components/ShotCanvas'
 
@@ -178,6 +180,23 @@ function RetakeCapture({
     }
   }
 
+  /**
+   * Même chemin qu une prise : aucune écriture avant le calage, la photo importée
+   * devient simplement la trame en attente. Le fantôme de référence, déjà affiché à
+   * l écran de calage, compense l absence de superposition en direct au moment de
+   * l import.
+   */
+  async function onPick(file: File) {
+    setError(null)
+    try {
+      const captured = await importPhoto(file)
+      setPendingShot({ viewpointId, frame, captured })
+      navigate(`/v/${viewpointId}/align`)
+    } catch {
+      setError("La photo n'a pas pu être importée. Réessayez.")
+    }
+  }
+
   return (
     <Screen
       title={viewpoint.name}
@@ -187,72 +206,76 @@ function RetakeCapture({
         </Link>
       }
     >
-      {status === 'denied' || status === 'unavailable' ? (
-        <CameraDeniedNotice status={status} onRetry={retry} />
-      ) : (
-        <div className="relative flex h-full items-center justify-center overflow-hidden">
-          {/* Le flux et le fantôme doivent occuper exactement la même boîte, au rapport
-              d aspect du cadre canonique. Sinon le flux se letterboxe au rapport du
-              capteur et le fantôme à celui du cadre : les deux calques n ont plus ni la
-              même échelle ni le même centre, et l aide au cadrage induit en erreur.
-              `object-cover` sur la vidéo montre précisément le recadrage que le cadre
-              canonique appliquera à la prise. La hauteur est définie et la largeur
-              dérivée du rapport, pour que la boîte le respecte exactement. */}
-          <div
-            className="relative h-full w-auto shrink-0"
-            style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
-          >
-            <video
-              ref={videoRef}
-              playsInline
-              muted
-              autoPlay
-              className="absolute inset-0 h-full w-full bg-black object-cover"
-            />
-
-            <ShotCanvas
-              data-testid="ghost"
-              source={referenceBitmap}
-              transform={reference?.transform ?? { scale: 1, rotation: 0, tx: 0, ty: 0 }}
-              frame={frame}
-              shot={{
-                width: reference?.width ?? frame.width,
-                height: reference?.height ?? frame.height,
-              }}
-              className="pointer-events-none absolute inset-0 h-full w-full"
-              style={{ opacity: ghostOpacity }}
-            />
-          </div>
-
-          {rotationHint && (
-            <p
-              data-testid="rotation-hint"
-              className="absolute inset-x-4 top-4 rounded-lg bg-amber-900/90 p-3 text-sm"
+      <div className="relative flex h-full items-center justify-center overflow-hidden">
+        {status === 'denied' || status === 'unavailable' ? (
+          <CameraDeniedNotice status={status} onRetry={retry} />
+        ) : (
+          <>
+            {/* Le flux et le fantôme doivent occuper exactement la même boîte, au rapport
+                d aspect du cadre canonique. Sinon le flux se letterboxe au rapport du
+                capteur et le fantôme à celui du cadre : les deux calques n ont plus ni la
+                même échelle ni le même centre, et l aide au cadrage induit en erreur.
+                `object-cover` sur la vidéo montre précisément le recadrage que le cadre
+                canonique appliquera à la prise. La hauteur est définie et la largeur
+                dérivée du rapport, pour que la boîte le respecte exactement. */}
+            <div
+              className="relative h-full w-auto shrink-0"
+              style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
             >
-              Tournez le téléphone pour retrouver le cadrage d'origine.
-            </p>
-          )}
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                autoPlay
+                className="absolute inset-0 h-full w-full bg-black object-cover"
+              />
 
-          <div className="absolute inset-x-4 bottom-28 rounded-xl bg-slate-900/80 p-3">
-            <OpacitySlider value={ghostOpacity} onChange={setGhostOpacity} />
-          </div>
+              <ShotCanvas
+                data-testid="ghost"
+                source={referenceBitmap}
+                transform={reference?.transform ?? { scale: 1, rotation: 0, tx: 0, ty: 0 }}
+                frame={frame}
+                shot={{
+                  width: reference?.width ?? frame.width,
+                  height: reference?.height ?? frame.height,
+                }}
+                className="pointer-events-none absolute inset-0 h-full w-full"
+                style={{ opacity: ghostOpacity }}
+              />
+            </div>
 
-          <button
-            type="button"
-            data-testid="shutter"
-            disabled={status !== 'ready'}
-            onClick={onShutter}
-            className="absolute bottom-6 left-1/2 size-20 -translate-x-1/2 rounded-full border-4 border-white bg-white/30 disabled:opacity-40"
-            aria-label="Prendre la photo"
-          />
+            {rotationHint && (
+              <p
+                data-testid="rotation-hint"
+                className="absolute inset-x-4 top-4 rounded-lg bg-amber-900/90 p-3 text-sm"
+              >
+                Tournez le téléphone pour retrouver le cadrage d'origine.
+              </p>
+            )}
 
-          {error && (
-            <p className="absolute inset-x-4 top-4 rounded-lg bg-red-900/90 p-3 text-sm">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
+            <div className="absolute inset-x-4 bottom-28 rounded-xl bg-slate-900/80 p-3">
+              <OpacitySlider value={ghostOpacity} onChange={setGhostOpacity} />
+            </div>
+
+            <button
+              type="button"
+              data-testid="shutter"
+              disabled={status !== 'ready'}
+              onClick={onShutter}
+              className="absolute bottom-6 left-1/2 size-20 -translate-x-1/2 rounded-full border-4 border-white bg-white/30 disabled:opacity-40"
+              aria-label="Prendre la photo"
+            />
+          </>
+        )}
+
+        {/* Reste actionnable même caméra refusée ou indisponible : c est alors le
+            seul moyen d alimenter l app. */}
+        <PickPhotoButton onPick={onPick} />
+
+        {error && (
+          <p className="absolute inset-x-4 top-4 rounded-lg bg-red-900/90 p-3 text-sm">{error}</p>
+        )}
+      </div>
     </Screen>
   )
 }
