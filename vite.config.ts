@@ -2,7 +2,22 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+
+/** Hash du commit et date du build : en CI, GITHUB_SHA ; en local, git. */
+function buildStamp(): string {
+  const sha =
+    process.env.GITHUB_SHA?.slice(0, 7) ??
+    (() => {
+      try {
+        return execSync('git rev-parse --short HEAD').toString().trim()
+      } catch {
+        return 'inconnu'
+      }
+    })()
+  return `${sha} · ${new Date().toISOString().slice(0, 10)}`
+}
 
 export default defineConfig({
   plugins: [
@@ -44,6 +59,9 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
-  define: { __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0') },
+  // Identifie précisément le build servi. `npm_package_version` ne servait à rien :
+  // package.json est figé à 0.0.0, donc l écran de réglages affichait toujours la
+  // même chose et ne permettait pas de savoir quelle version tournait réellement.
+  define: { __APP_VERSION__: JSON.stringify(buildStamp()) },
   test: { environment: 'node', globals: true, include: ['src/**/*.test.ts'] },
 })
