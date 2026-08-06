@@ -9,7 +9,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // `prompt` et non `autoUpdate` : le nouveau service worker attend au lieu de
+      // s imposer. C est l app qui propose le rechargement, et l utilisateur qui
+      // choisit son moment — un rechargement subi en plein calage perdrait la photo
+      // en attente, qui ne vit qu en mémoire.
+      registerType: 'prompt',
+      // L enregistrement est fait par `useRegisterSW` dans UpdateNotice, pas par un
+      // script injecté : sinon le service worker serait enregistré deux fois.
+      injectRegister: null,
       pwaAssets: { image: 'public/icon.svg' },
       manifest: {
         name: 'b4after — comparaisons avant/après',
@@ -21,7 +28,16 @@ export default defineConfig({
         background_color: '#0f172a',
         theme_color: '#0f172a',
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2}'] },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Les deux réglages sont indépendants et on veut le meilleur de chacun.
+        // `clientsClaim` fait prendre le contrôle dès la PREMIÈRE visite, sans quoi
+        // le hors ligne ne marcherait qu au deuxième chargement. `skipWaiting` à faux
+        // fait ATTENDRE les versions suivantes : c est le bandeau qui les active, sur
+        // décision de l utilisateur.
+        clientsClaim: true,
+        skipWaiting: false,
+      },
       devOptions: { enabled: false },
     }),
   ],
