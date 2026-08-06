@@ -1,5 +1,6 @@
+import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawShot } from './drawShot'
+import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
 import type { ComparisonInput } from './sideBySide'
 import type { GifRequest, GifResponse } from './gif.worker'
 import GifWorker from './gif.worker?worker'
@@ -9,30 +10,48 @@ export const GIF_STEPS = 10
 export const GIF_HOLD_MS = 500
 export const GIF_STEP_MS = 80
 
+// Plafond du chemin GIF, plus bas que celui de la vidéo (`EXPORT_MAX_EDGE`, 2048) :
+// contrairement à `MediaRecorder`, qui encode au fil de l eau, ce chemin accumule en
+// mémoire les frames RGBA brutes de chaque palier avant de les poster au worker — environ
+// 83 Mo à 1920x1080 contre 10 Mo à 640 px, et la quantification tourne sur autant de
+// pixels par frame. Et c est précisément le repli des navigateurs sans MP4, donc des
+// appareils les plus faibles : un GIF moins large qu attendu en qualité maximale est un
+// moindre mal face à un onglet qui meurt.
+export const GIF_WIDTH_CAP = 1080
+
 function abortError(): DOMException {
   return new DOMException('Export annulé', 'AbortError')
 }
 
 /**
- * Fondu en `GIF_STEPS` frames de l avant vers l après, avec une pause aux deux
- * extrémités et une boucle infinie. Le retour se fait par coupe franche : doubler
- * les frames pour un fondu retour doublerait le poids du fichier sans rien apporter
- * à une comparaison avant/après.
+ * Transition (fondu, coupe ou balayage) de l avant vers l après, avec une pause aux
+ * deux extrémités et une boucle infinie. Le retour se fait par coupe franche quelle
+ * que soit la transition choisie : doubler les frames pour un retour animé
+ * doublerait le poids du fichier sans rien apporter à une comparaison avant/après.
  */
 export async function renderCrossfadeGif(
   before: ComparisonInput,
   after: ComparisonInput,
   frame: Size,
   options: {
+    transition?: Transition
+    width?: VideoWidth
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
 ): Promise<Blob> {
   if (options.signal?.aborted) throw abortError()
 
-  // Contrairement à l export JPEG, c est la largeur seule qui borne le GIF : c est
-  // elle qui détermine le poids du fichier au partage.
-  const widthFactor = Math.min(1, GIF_MAX_WIDTH / frame.width)
+  const transition = options.transition ?? 'crossfade'
+  // Deux paliers immobiles, plus les frames de transition : une coupe franche n en a
+  // aucune et se réduit donc à deux frames.
+  const steps = transitionSteps(transition) + 2
+
+  // `GIF_WIDTH_CAP` prime même sur `'full'` : voir sa déclaration plus haut. Et le
+  // plafond n est jamais franchi vers le haut, dans un sens comme dans l autre : un
+  // export n agrandit pas.
+  const requestedWidth = Math.min(targetWidth(options.width ?? GIF_MAX_WIDTH, frame), GIF_WIDTH_CAP)
+  const widthFactor = Math.min(1, requestedWidth / frame.width)
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 
@@ -40,39 +59,19 @@ export async function renderCrossfadeGif(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Contexte 2D indisponible')
 
-  const scaled = (input: ComparisonInput) => ({
-    source: input.source,
-    transform: {
-      ...input.transform,
-      tx: input.transform.tx * widthFactor,
-      ty: input.transform.ty * widthFactor,
-    },
-    shot: {
-      width: input.shot.width * widthFactor,
-      height: input.shot.height * widthFactor,
-    },
-  })
-
-  const from = scaled(before)
-  const to = scaled(after)
+  const from = scaleInput(before, widthFactor)
+  const to = scaleInput(after, widthFactor)
   const frames: ArrayBuffer[] = []
   const delays: number[] = []
 
-  for (let step = 0; step < GIF_STEPS; step += 1) {
+  for (let step = 0; step < steps; step += 1) {
     if (options.signal?.aborted) throw abortError()
 
-    const mix = step / (GIF_STEPS - 1)
-    ctx.clearRect(0, 0, width, height)
-    ctx.globalAlpha = 1
-    drawShot(ctx, from.source, from.transform, { width, height }, from.shot)
-    if (mix > 0) {
-      ctx.globalAlpha = mix
-      drawShot(ctx, to.source, to.transform, { width, height }, to.shot)
-      ctx.globalAlpha = 1
-    }
+    const mix = step / (steps - 1)
+    drawTransition(ctx, from, to, { width, height }, mix, transition)
 
     frames.push(ctx.getImageData(0, 0, width, height).data.buffer as ArrayBuffer)
-    const isEdge = step === 0 || step === GIF_STEPS - 1
+    const isEdge = step === 0 || step === steps - 1
     delays.push(isEdge ? GIF_HOLD_MS : GIF_STEP_MS)
   }
 

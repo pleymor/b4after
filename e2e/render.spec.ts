@@ -135,7 +135,8 @@ test('renderSideBySide accole deux photos portrait horizontalement', async ({ pa
     })
 
     const blob = await renderSideBySide(input('#ff0000'), input('#0000ff'), frame, {
-      showDates: false,
+      stamp: 'none',
+      layout: 'auto',
     })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
@@ -151,7 +152,7 @@ test('renderSideBySide accole deux photos portrait horizontalement', async ({ pa
     }
   }, HELPERS)
 
-  // 2 x 100 px + 8 px de séparateur, hauteur inchangée puisque showDates est faux.
+  // 2 x 100 px + 8 px de séparateur, hauteur inchangée puisque le bandeau est absent.
   expect(result).toMatchObject({ type: 'image/jpeg', width: 208, height: 150 })
   expect(result.left[0]).toBeGreaterThan(200)
   expect(result.right[2]).toBeGreaterThan(200)
@@ -168,7 +169,7 @@ test('renderSideBySide empile deux photos paysage verticalement', async ({ page 
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: false }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -187,13 +188,107 @@ test('renderSideBySide réserve un bandeau pour les dates', async ({ page }) => 
     const input = { source: bitmap, transform: IDENTITY, takenAt: Date.UTC(2026, 6, 31, 12), shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: true }),
+      await renderSideBySide(input, input, frame, { stamp: 'date', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
 
   // Bandeau = round(100 * 0.14) = 14 px sous chaque photo.
   expect(size).toEqual({ width: 208, height: 164 })
+})
+
+test('renderSideBySide empile un cadre portrait quand la disposition est forcée', async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre portrait : la règle automatique l accolerait horizontalement. Inverser
+    // ce choix est précisément ce qui prouve que l option est honorée — un test sur
+    // un cadre paysage passerait aussi avec `layout` ignoré.
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'vertical' }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  // 100 px de large, 2 x 150 px + 8 px de séparateur.
+  expect(size).toEqual({ width: 100, height: 308 })
+})
+
+test('renderSideBySide accole un cadre paysage quand la disposition est forcée', async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 150, height: 100 }
+    const bitmap = window.__stripes(150, 100)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'horizontal' }),
+    )
+    return { width: decoded.width, height: decoded.height }
+  }, HELPERS)
+
+  expect(size).toEqual({ width: 308, height: 100 })
+})
+
+test('renderSideBySide garde l heure dans sa cellule sans déborder sur les bords', async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre volontairement étroit : « JJ/MM/AAAA à HH:MM » est environ 1,7 fois plus
+    // long que la date seule, alors que le corps de la police est calculé sur la
+    // hauteur du bandeau. Sans garde-fou, le texte sortirait de sa cellule.
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = {
+      source: bitmap,
+      transform: IDENTITY,
+      takenAt: new Date(2026, 6, 31, 14, 5).getTime(),
+      shot: frame,
+    }
+
+    const decoded = await createImageBitmap(
+      await renderSideBySide(input, input, frame, { stamp: 'datetime', layout: 'auto' }),
+    )
+    const canvas = new OffscreenCanvas(decoded.width, decoded.height)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(decoded, 0, 0)
+
+    // Le bandeau est sombre (#0f172a, [15,23,42]), le texte clair (#f1f5f9,
+    // [241,245,249]) : contrairement à blanc-contre-presque-blanc, ce contraste est
+    // franc. On échantillonne juste à l intérieur des deux bords de la cellule, au
+    // milieu de la hauteur du bandeau — un texte trop large y laisserait des pixels
+    // clairs.
+    const left = window.__pixel(ctx, 2, 150 + 7)
+    const right = window.__pixel(ctx, 97, 150 + 7)
+    return { width: decoded.width, height: decoded.height, left, right }
+  }, HELPERS)
+
+  // Bandeau = round(100 * 0.14) = 14 px, comme pour la date seule.
+  expect(result).toMatchObject({ width: 208, height: 164 })
+  // Sombre franc aux deux bords : le texte n a débordé ni à gauche ni à droite.
+  expect(result.left[0]).toBeLessThan(100)
+  expect(result.left[1]).toBeLessThan(100)
+  expect(result.left[2]).toBeLessThan(100)
+  expect(result.right[0]).toBeLessThan(100)
+  expect(result.right[1]).toBeLessThan(100)
+  expect(result.right[2]).toBeLessThan(100)
 })
 
 test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", async ({ page }) => {
@@ -207,7 +302,7 @@ test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", asyn
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { showDates: false }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -236,7 +331,10 @@ test('renderSideBySide réduit aussi la translation stockée', async ({ page }) 
     // tx = ±1000 et non ±1500 : à 1500 la translation sature le jeu disponible, la
     // frontière rouge/bleu sort de la cellule dans les deux cas et le test ne
     // discriminerait plus rien.
-    const blob = await renderSideBySide(input(1000), input(-1000), frame, { showDates: false })
+    const blob = await renderSideBySide(input(1000), input(-1000), frame, {
+      stamp: 'none',
+      layout: 'auto',
+    })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
     const ctx = canvas.getContext('2d')
@@ -513,4 +611,253 @@ test('renderCrossfadeVideo anime réellement : les frames ne sont pas identiques
   }, HELPERS)
 
   expect(result.start).not.toEqual(result.end)
+})
+
+test('renderCrossfadeGif ne dépense aucune frame pour une coupe franche', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const input = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeGif(input('#ff0000'), input('#0000ff'), frame, {
+      transition: 'cut',
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    return { type: blob.type, trailer: bytes[bytes.length - 1], progress }
+  }, HELPERS)
+
+  expect(result.type).toBe('image/gif')
+  expect(result.trailer).toBe(0x3b)
+  // Deux paliers, aucune frame intermédiaire — contre 10 pour un fondu.
+  expect(result.progress.at(-1)).toEqual([2, 2])
+})
+
+test('renderCrossfadeGif balaie l image au lieu de la fondre', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { drawTransition, scaleInput } = await import('/src/render/crossfade.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 100 }
+    const input = (color) => {
+      const canvas = new OffscreenCanvas(100, 100)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 100)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    // On dessine directement l état à mi-course, seul moyen d observer la géométrie
+    // du balayage : à mix = 0.5, la moitié gauche est l après, la droite l avant.
+    // Un fondu, lui, donnerait un violet uniforme des deux côtés.
+    const canvas = new OffscreenCanvas(100, 100)
+    const ctx = canvas.getContext('2d')
+    const from = scaleInput(input('#ff0000'), 1)
+    const to = scaleInput(input('#0000ff'), 1)
+    drawTransition(ctx, from, to, { width: 100, height: 100 }, 0.5, 'wipe')
+
+    const blob = await renderCrossfadeGif(input('#ff0000'), input('#0000ff'), frame, {
+      transition: 'wipe',
+    })
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+
+    return {
+      left: window.__pixel(ctx, 25, 50),
+      right: window.__pixel(ctx, 75, 50),
+      header: String.fromCharCode(...bytes.slice(0, 6)),
+    }
+  }, HELPERS)
+
+  expect(result.header).toBe('GIF89a')
+  // Bleu franc à gauche, rouge franc à droite : ni l un ni l autre n est un mélange.
+  expect(result.left).toEqual([0, 0, 255])
+  expect(result.right).toEqual([255, 0, 0])
+})
+
+test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+      transition: 'cut',
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    return { type: blob.type, size: blob.size, progress }
+  }, HELPERS)
+
+  expect(result.type.startsWith('video/mp4')).toBe(true)
+  expect(result.size).toBeGreaterThan(1000)
+  // 3 allers-retours x 1 palier, aucune frame de transition, plus le palier final qui
+  // montre l après (voir le test dédié plus bas) : 3 + 1.
+  expect(result.progress.at(-1)).toEqual([4, 4])
+})
+
+test('renderCrossfadeGif élargit à 1080 px sur demande', async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 1200, height: 1600 }
+    const bitmap = window.__stripes(1200, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 1080, transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // 1080 / 1200 = 0.9 ; 1600 x 0.9 = 1440.
+  expect(size).toEqual({ width: 1080, height: 1440 })
+})
+
+test("renderCrossfadeGif n'agrandit jamais un cadre plus petit que la cible", async ({
+  page,
+}) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 300, height: 400 }
+    const bitmap = window.__stripes(300, 400)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 1080, transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // La contrainte tient dans les deux sens : demander plus grand que le cadre ne
+  // fabrique pas du détail qui n existe pas.
+  expect(size).toEqual({ width: 300, height: 400 })
+})
+
+test("renderCrossfadeGif plafonne à 1080 px même en qualité maximale", async ({ page }) => {
+  const size = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeGif } = await import('/src/render/gif.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    // Cadre large : `'full'` viserait EXPORT_MAX_EDGE (2048), largement au-delà du
+    // plafond du chemin GIF — c est précisément ce qui doit être retenu ici.
+    const frame = { width: 2400, height: 1600 }
+    const bitmap = window.__stripes(2400, 1600)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
+
+    const bytes = new Uint8Array(
+      await (
+        await renderCrossfadeGif(input, input, frame, { width: 'full', transition: 'cut' })
+      ).arrayBuffer(),
+    )
+    return { width: bytes[6] | (bytes[7] << 8), height: bytes[8] | (bytes[9] << 8) }
+  }, HELPERS)
+
+  // 1080 / 2400 = 0.45 ; 1600 x 0.45 = 720. Sans le plafond, la largeur viserait 2048.
+  expect(size).toEqual({ width: 1080, height: 720 })
+})
+
+test("renderCrossfadeVideo joue le nombre d'allers-retours demandé, et montre bien l'après en coupe", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    const progress = []
+    // `transition: 'cut'` pour que le test reste court : un palier par aller-retour,
+    // aucune frame de fondu. Des couleurs franches et différentes pour l avant et
+    // l après : c est le seul moyen de prouver que le palier final montre bien l après,
+    // et non le dernier avant simplement tenu plus longtemps.
+    const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+      reps: 1,
+      transition: 'cut',
+      onProgress: (done, total) => progress.push([done, total]),
+    })
+
+    const url = URL.createObjectURL(blob)
+    const video = document.createElement('video')
+    video.muted = true
+    video.src = url
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true })
+      video.addEventListener('error', () => reject(video.error), { once: true })
+    })
+
+    const sampleAt = async (time) => {
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true })
+        video.currentTime = time
+      })
+      const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight)
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(video, 0, 0)
+      return window.__pixel(ctx, Math.floor(video.videoWidth / 2), Math.floor(video.videoHeight / 2))
+    }
+
+    // Avec `reps: 1`, la boucle ne dessine qu un seul palier (l avant, tenu 500 ms) ;
+    // le palier ajouté par le correctif — l après — le suit immédiatement, sur les
+    // 500 ms suivantes. On échantillonne donc peu après chaque frontière, avec assez
+    // de marge pour rester insensible à la latence de démarrage de l enregistrement.
+    const start = await sampleAt(0.1)
+    const end = await sampleAt(0.6)
+
+    URL.revokeObjectURL(url)
+    return { start, end, progress }
+  }, HELPERS)
+
+  // 1 aller-retour (le palier « avant ») plus le palier final ajouté par le correctif :
+  // sans lui la barre de progression n aurait jamais atteint 100 %.
+  expect(result.progress.at(-1)).toEqual([2, 2])
+  // Preuve directe que la coupe se lit bien avant → après même avec un seul
+  // aller-retour : sans le correctif, `end` resterait rouge comme `start`. Des seuils,
+  // pas une égalité stricte : l encodage H.264 introduit un bruit de quantification
+  // YUV qui décale chaque canal de quelques niveaux (`#ff0000` ressort par exemple en
+  // ~[254, 1, 1]).
+  expect(result.start[0]).toBeGreaterThan(200)
+  expect(result.start[2]).toBeLessThan(50)
+  expect(result.end[2]).toBeGreaterThan(200)
+  expect(result.end[0]).toBeLessThan(50)
 })

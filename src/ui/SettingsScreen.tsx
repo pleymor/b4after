@@ -61,9 +61,11 @@ export function SettingsScreen() {
           </p>
         </section>
 
-        <p data-testid="app-version" className="text-slate-500">
-          Version {__APP_VERSION__}
-        </p>
+        {/* La version, la date de build et la révision vivent sur la page À propos, et
+            là seulement : dupliquer l information ici la ferait diverger. */}
+        <Link to="/about" data-testid="about-link" className="block text-sky-400 underline">
+          À propos de b4after
+        </Link>
       </div>
     </Screen>
   )

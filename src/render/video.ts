@@ -1,23 +1,14 @@
+import type { Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawShot } from './drawShot'
-import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS, GIF_STEPS } from './gif'
+import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
+import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
-// Même borne que le GIF (voir gif.ts) : c est la largeur qui fixe le poids du
-// fichier au partage, et les deux exports doivent se comporter pareil sur ce point.
+// Même défaut que le GIF (voir gif.ts), pas un plafond : le vrai plafond commun aux
+// deux exports est EXPORT_MAX_EDGE, appliqué dans targetWidth.
 export const VIDEO_MAX_WIDTH = GIF_MAX_WIDTH
 
 const VIDEO_MIME_CANDIDATES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
-
-// Nombre de fondus enchaînés joués à la suite. Un seul aller (avant → après) ne
-// dure que le temps d une prise + un fondu, soit environ 1,1 s : assez court pour
-// qu une seule lecture ressemble à un instantané figé plutôt qu à une animation.
-// En jouer trois, en va-et-vient, porte la durée totale à environ 3,4 s.
-const REPS = 3
-
-// Le fondu du GIF compte GIF_STEPS frames dont deux sont les paliers immobiles
-// (avant, après) : il reste GIF_STEPS - 2 frames de transition.
-const FADE_STEPS = GIF_STEPS - 2
 
 function abortError(): DOMException {
   return new DOMException('Export annulé', 'AbortError')
@@ -49,17 +40,21 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Fondu enchaîné en va-et-vient (avant → après → avant → …) dessiné en temps réel
- * sur un canevas détaché, capturé et encodé par `MediaRecorder`. Même rythme que
- * `renderCrossfadeGif` (paliers de 500 ms, pas de fondu de 80 ms) pour que les deux
- * exports se ressemblent, mais rejoué `REPS` fois pour qu une seule lecture se lise
- * déjà comme une animation plutôt qu un clignement.
+ * Transition (fondu, coupe ou balayage) de l avant vers l après, en va-et-vient
+ * (avant → après → avant → …), dessinée en temps réel sur un canevas détaché, capturée
+ * et encodée par `MediaRecorder`. Même rythme que `renderCrossfadeGif` (paliers de
+ * 500 ms, pas de transition de 80 ms) pour que les deux exports se ressemblent, mais
+ * rejouée le nombre de fois spécifié par `reps` pour qu une seule lecture se lise déjà
+ * comme une animation plutôt qu un clignement.
  */
 export async function renderCrossfadeVideo(
   before: ComparisonInput,
   after: ComparisonInput,
   frame: Size,
   options: {
+    transition?: Transition
+    width?: VideoWidth
+    reps?: VideoLength
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -69,25 +64,20 @@ export async function renderCrossfadeVideo(
   const mime = supportedVideoMime()
   if (!mime) throw new Error('Aucun format vidéo pris en charge')
 
-  const widthFactor = Math.min(1, VIDEO_MAX_WIDTH / frame.width)
+  // Le plafond n est jamais franchi vers le haut : un export n agrandit pas.
+  const widthFactor = Math.min(1, targetWidth(options.width ?? VIDEO_MAX_WIDTH, frame) / frame.width)
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 
-  const scaled = (input: ComparisonInput) => ({
-    source: input.source,
-    transform: {
-      ...input.transform,
-      tx: input.transform.tx * widthFactor,
-      ty: input.transform.ty * widthFactor,
-    },
-    shot: {
-      width: input.shot.width * widthFactor,
-      height: input.shot.height * widthFactor,
-    },
-  })
+  const from = scaleInput(before, widthFactor)
+  const to = scaleInput(after, widthFactor)
+  const transition = options.transition ?? 'crossfade'
+  const fadeSteps = transitionSteps(transition)
 
-  const from = scaled(before)
-  const to = scaled(after)
+  // Trois allers-retours par défaut, soit environ 3,4 s : un seul aller ne dure que
+  // le temps d'une prise plus un fondu (~1,1 s) et se lit comme un instantané figé
+  // plutôt que comme une animation.
+  const reps = options.reps ?? 3
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -98,17 +88,6 @@ export async function renderCrossfadeVideo(
   const maybeCtx = canvas.getContext('2d')
   if (!maybeCtx) throw new Error('Contexte 2D indisponible')
   const ctx = maybeCtx
-
-  function draw(mix: number) {
-    ctx.clearRect(0, 0, width, height)
-    ctx.globalAlpha = 1
-    drawShot(ctx, from.source, from.transform, { width, height }, from.shot)
-    if (mix > 0) {
-      ctx.globalAlpha = mix
-      drawShot(ctx, to.source, to.transform, { width, height }, to.shot)
-      ctx.globalAlpha = 1
-    }
-  }
 
   // Un taux explicite plutôt que la capture « au repaint » par défaut : sans lui
   // la cadence dépend du navigateur, ce qui marche aujourd hui parce que nos
@@ -123,7 +102,11 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  const total = REPS * (1 + FADE_STEPS)
+  // Pour une coupe franche (`fadeSteps === 0`), la boucle ne dessine que le palier de
+  // *départ* de chaque aller-retour ; l état atteint après le dernier aller-retour n
+  // est donc jamais dessiné par la boucle elle-même (voir plus bas). D où le `+ 1` :
+  // sans lui la barre de progression n atteindrait jamais 100 %.
+  const total = fadeSteps === 0 ? reps + 1 : reps * (1 + fadeSteps)
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -157,22 +140,42 @@ export async function renderCrossfadeVideo(
     ;(async () => {
       let done = 0
       let mix = 0
-      for (let rep = 0; rep < REPS; rep += 1) {
+      for (let rep = 0; rep < reps; rep += 1) {
         const target = 1 - mix
 
-        draw(mix)
+        drawTransition(ctx, from, to, { width, height }, mix, transition)
         await wait(GIF_HOLD_MS, options.signal)
         done += 1
         options.onProgress?.(done, total)
 
-        for (let step = 1; step <= FADE_STEPS; step += 1) {
-          draw(mix + (target - mix) * (step / FADE_STEPS))
+        for (let step = 1; step <= fadeSteps; step += 1) {
+          drawTransition(
+            ctx,
+            from,
+            to,
+            { width, height },
+            mix + (target - mix) * (step / fadeSteps),
+            transition,
+          )
           await wait(GIF_STEP_MS, options.signal)
           done += 1
           options.onProgress?.(done, total)
         }
 
         mix = target
+      }
+
+      // Coupe franche : `fadeSteps` vaut 0, donc la boucle ci-dessus n a dessiné que
+      // les paliers de *départ* de chaque aller-retour, jamais l état atteint après le
+      // dernier. Sans ce palier, la vidéo s arrêterait sur le dernier avant affiché et
+      // ne montrerait jamais l après, même si `mix` vaut bien `target` à ce point.
+      // `crossfade` et `wipe` n en ont pas besoin : leur dernière frame de transition
+      // dessine déjà `mix = target`.
+      if (fadeSteps === 0) {
+        drawTransition(ctx, from, to, { width, height }, mix, transition)
+        await wait(GIF_HOLD_MS, options.signal)
+        done += 1
+        options.onProgress?.(done, total)
       }
 
       stopRecorder()

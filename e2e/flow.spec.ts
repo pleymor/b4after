@@ -492,6 +492,7 @@ test('exporte une image côte-à-côte', async ({ page }) => {
 
   await expect(page.getByTestId('reveal-slider')).toBeVisible()
 
+  await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-jpeg').click()
   const file = await download
@@ -503,6 +504,7 @@ test('exporte une vidéo animée avec une progression', async ({ page }) => {
   const { viewpointId, before, after } = await seedPair(page)
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
 
+  await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-gif').click()
   await expect(page.getByTestId('export-progress')).toBeVisible()
@@ -523,12 +525,136 @@ test('replie sur le GIF quand aucun format vidéo n est pris en charge', async (
   const { viewpointId, before, after } = await seedPair(page)
   await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
 
+  await page.getByTestId('open-video-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-gif').click()
   await expect(page.getByTestId('export-progress')).toBeVisible()
   const file = await download
 
   expect(file.suggestedFilename()).toMatch(/\.gif$/)
+})
+
+test("un échec d'export animé affiche un message visible, distinct du succès", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    // Force le repli GIF (aucun autre moyen fiable de faire échouer MediaRecorder dans
+    // tous les environnements de test), puis fait échouer ce chemin précis : c est la
+    // seule fonction du worker GIF que `renderCrossfadeGif` appelle avant de poster son
+    // message, sur le modèle du test « replie sur le GIF… » qui neutralise déjà
+    // `MediaRecorder.isTypeSupported`.
+    MediaRecorder.isTypeSupported = () => false
+    OffscreenCanvasRenderingContext2D.prototype.getImageData = () => {
+      throw new Error('échec simulé pour le test')
+    }
+  })
+
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-video-options').click()
+  await page.getByTestId('export-gif').click()
+
+  const status = page.getByTestId('export-status')
+  await expect(status).toBeVisible()
+  await expect(status).toContainText('échoué')
+  // Couleur d alerte, distincte du texte neutre du succès et de l annulation.
+  await expect(status).toHaveClass(/text-rose-300/)
+  // La feuille s est refermée : le message n est plus recouvert par son panneau
+  // opaque, qui masquait entièrement le pied de page avant ce correctif.
+  await expect(page.getByTestId('close-sheet')).toHaveCount(0)
+})
+
+test("fermer la feuille pendant l'encodage n'interrompt ni ne cache la progression", async ({
+  page,
+}) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-video-options').click()
+  await page.getByTestId('export-gif').click()
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+
+  // Tape sur la croix pendant l encodage : sans le correctif, la feuille se refermait
+  // et emportait avec elle la progression et le bouton d annulation, sans aucun moyen
+  // de les retrouver avant la fin de l export.
+  await page.getByTestId('close-sheet').click()
+
+  await expect(page.getByTestId('export-progress')).toBeVisible()
+  await expect(page.getByTestId('cancel-export')).toBeVisible()
+
+  // L export peut toujours être interrompu par son propre bouton, resté visible.
+  await page.getByTestId('cancel-export').click()
+  await expect(page.getByTestId('export-status')).toContainText('annulé')
+})
+
+test('mémorise les réglages d export d une visite à l autre', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  const url = `/v/${viewpointId}/compare?before=${before}&after=${after}`
+  await page.goto(url)
+
+  await page.getByTestId('open-image-options').click()
+  await page.getByTestId('stamp-mode').getByRole('radio', { name: 'Date + heure' }).click()
+  await page.getByTestId('layout-mode').getByRole('radio', { name: 'Vertical' }).click()
+  await page.getByTestId('close-sheet').click()
+
+  // Rechargement complet : ce qui survit vient de localStorage, pas de l état React.
+  await page.goto(url)
+  await page.getByTestId('open-image-options').click()
+
+  await expect(
+    page.getByTestId('stamp-mode').getByRole('radio', { name: 'Date + heure' }),
+  ).toHaveAttribute('aria-checked', 'true')
+  await expect(
+    page.getByTestId('layout-mode').getByRole('radio', { name: 'Vertical' }),
+  ).toHaveAttribute('aria-checked', 'true')
+})
+
+test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
+  // Écran de téléphone : c est là que le problème se posait, l image y prenant
+  // presque toute la hauteur utile.
+  await page.setViewportSize({ width: 390, height: 664 })
+
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+  const slider = page.getByTestId('reveal-slider')
+  await expect(slider).toBeVisible()
+
+  // Le motif du problème d origine : les commandes d export sont atteignables sans
+  // le moindre geste de défilement.
+  await expect(page.getByTestId('open-image-options')).toBeInViewport()
+  await expect(page.getByTestId('open-video-options')).toBeInViewport()
+
+  // L image se contente de la hauteur restante : il n y a rien à défiler.
+  const overflow = await page.evaluate(() => {
+    const main = document.querySelector('main')
+    if (!main) throw new Error('main introuvable')
+    return main.scrollHeight - main.clientHeight
+  })
+  expect(overflow).toBeLessThanOrEqual(1)
+
+  // Preuve de non-déformation, sans comparer de rapports largeur/hauteur peints :
+  // avec `object-contain`, le canvas remplit toute la boîte du slider et l image y
+  // est *contenue* (bandes noires éventuelles), donc le rapport de la boîte ne dit
+  // rien du rapport réellement peint — il faudrait recalculer les bandes, comme le
+  // fait `contentRect` plus haut dans ce fichier pour un autre scénario.
+  //
+  // On prend un chemin plus direct : le canvas garde ses attributs `width`/`height`
+  // intrinsèques, égaux au cadre canonique (300×400 dans ce fixture), quelle que
+  // soit sa taille CSS — c est `ShotCanvas` qui les fixe, indépendamment du style.
+  // Un élément remplacé avec un ratio intrinsèque connu ne peut, par construction
+  // CSS, déformer son contenu sous `object-contain` : celui-ci redimensionne en
+  // préservant ce ratio. Il suffit donc de vérifier que ce couple d attributs a
+  // survécu, et que la boîte qui l accueille tient entièrement dans le viewport
+  // (sans quoi elle serait rognée, pas déformée, mais tout aussi invisible).
+  const sliderBox = (await slider.boundingBox())!
+  expect(sliderBox.y + sliderBox.height).toBeLessThanOrEqual(664)
+
+  const canvasSize = await slider
+    .locator('canvas')
+    .first()
+    .evaluate((el: HTMLCanvasElement) => ({ width: el.width, height: el.height }))
+  expect(canvasSize).toEqual({ width: 300, height: 400 })
 })
 
 test('signale une comparaison introuvable', async ({ page }) => {
@@ -543,7 +669,24 @@ test('affiche l état du stockage dans les réglages', async ({ page }) => {
 
   await expect(page.getByTestId('storage-usage')).toContainText(/o|ko|Mo|Go/)
   await expect(page.getByTestId('persistence-state')).toBeVisible()
-  await expect(page.getByTestId('app-version')).toBeVisible()
+})
+
+test('présente le projet et sa version sur la page À propos', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByRole('link', { name: 'Réglages' }).click()
+  await page.getByTestId('about-link').click()
+
+  // Un numéro de version affiché, quel qu il soit : le figer ici obligerait à
+  // toucher ce test à chaque montée de version.
+  await expect(page.getByTestId('app-version')).toContainText(/\d+\.\d+\.\d+/)
+  await expect(page.getByTestId('build-date')).toContainText(/\d{2}\/\d{2}\/\d{4}/)
+  // Le serveur de test tourne depuis le dépôt : la révision est réelle, pas 'dev'.
+  await expect(page.getByTestId('commit-sha')).not.toBeEmpty()
+  await expect(page.getByRole('link', { name: /github/i })).toHaveAttribute(
+    'href',
+    'https://github.com/pleymor/b4after',
+  )
+  await expect(page.getByTestId('share-app')).toBeVisible()
 })
 
 test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({ page }) => {
@@ -576,6 +719,7 @@ test('parcours complet : créer, reprendre, caler, comparer, exporter', async ({
   await page.getByTestId('compare').click()
   await expect(page.getByTestId('reveal-slider')).toBeVisible()
 
+  await page.getByTestId('open-image-options').click()
   const download = page.waitForEvent('download')
   await page.getByTestId('export-jpeg').click()
   expect((await download).suggestedFilename()).toContain('salle-de-bain')

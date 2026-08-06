@@ -5,19 +5,23 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-/** Hash du commit et date du build : en CI, GITHUB_SHA ; en local, git. */
-function buildStamp(): string {
-  const sha =
-    process.env.GITHUB_SHA?.slice(0, 7) ??
-    (() => {
-      try {
-        return execSync('git rev-parse --short HEAD').toString().trim()
-      } catch {
-        return 'inconnu'
-      }
-    })()
-  return `${sha} · ${new Date().toISOString().slice(0, 10)}`
+/**
+ * Révision git courte, ou `'dev'` quand le build ne part pas d un dépôt — une archive
+ * téléchargée doit pouvoir se construire. `stdio` en `pipe` pour que l échec de la
+ * commande ne salisse pas la sortie du build.
+ */
+function shortSha(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim()
+  } catch {
+    return 'dev'
+  }
 }
+
 
 export default defineConfig({
   plugins: [
@@ -59,9 +63,14 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
-  // Identifie précisément le build servi. `npm_package_version` ne servait à rien :
-  // package.json est figé à 0.0.0, donc l écran de réglages affichait toujours la
-  // même chose et ne permettait pas de savoir quelle version tournait réellement.
-  define: { __APP_VERSION__: JSON.stringify(buildStamp()) },
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0'),
+    // Évaluée au chargement de la config, donc à chaque build. C est ce qui rend la
+    // date honnête — et, accessoirement, ce qui fait changer l empreinte du bundle à
+    // chaque déploiement, donc retélécharger les clients. Le dépôt déployant déjà à
+    // chaque push, l effet est le même qu avant.
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+    __COMMIT_SHA__: JSON.stringify(shortSha()),
+  },
   test: { environment: 'node', globals: true, include: ['src/**/*.test.ts'] },
 })

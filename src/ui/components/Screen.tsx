@@ -4,11 +4,18 @@ export function Screen({
   title,
   back,
   action,
+  footer,
   children,
 }: {
   title: string
   back?: ReactNode
   action?: ReactNode
+  /**
+   * Barre de commandes rendue sous le contenu. Elle est **hors** du conteneur
+   * défilant, donc fixe par construction : ni `position: fixed`, ni `z-index`, ni
+   * hauteur à compenser dans le contenu.
+   */
+  footer?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -19,6 +26,11 @@ export function Screen({
         {action}
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
+      {footer && (
+        <div className="border-t border-slate-700 pb-[env(safe-area-inset-bottom)]">
+          {footer}
+        </div>
+      )}
     </div>
   )
 }
