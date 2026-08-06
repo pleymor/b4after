@@ -19,4 +19,15 @@ describe('fittedFontSize', () => {
     // se terminerait jamais. C est la garantie de terminaison, pas le cas nominal.
     expect(fittedFontSize(() => 10_000, 50, 14)).toBe(6)
   })
+
+  it('choisit le même ratio quelle que soit l échelle', () => {
+    // `measureText` est essentiellement linéaire en corps de police : on la modélise
+    // ainsi. L aperçu rend tout cinq fois plus petit que l export, donc les deux
+    // doivent retenir la MÊME fraction du corps de départ — sinon l aperçu ne montre
+    // pas ce que l export produira.
+    const measure = (size: number) => size * 12
+    const apercu = fittedFontSize(measure, 100, 20) / 20
+    const exportation = fittedFontSize(measure, 500, 100) / 100
+    expect(apercu).toBeCloseTo(exportation, 5)
+  })
 })

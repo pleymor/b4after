@@ -4,8 +4,17 @@ import { getShot } from '@/db/shots'
 import { getViewpoint } from '@/db/viewpoints'
 import { useBitmap } from '@/hooks/useBitmap'
 import { useExportOptions } from '@/hooks/useExportOptions'
+import { useObjectUrl } from '@/hooks/useObjectUrl'
 import { formatDate } from '@/lib/format'
-import type { Layout, StampMode, Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
+import {
+  STAMP_SCALE_MAX,
+  STAMP_SCALE_MIN,
+  type Layout,
+  type StampMode,
+  type Transition,
+  type VideoLength,
+  type VideoWidth,
+} from '@/lib/exportOptions'
 import { renderCrossfadeGif } from '@/render/gif'
 import { renderSideBySide, type ComparisonInput } from '@/render/sideBySide'
 import { renderCrossfadeVideo, supportedVideoMime } from '@/render/video'
@@ -47,6 +56,20 @@ const LENGTH_LABELS: readonly { value: VideoLength; label: string }[] = [
   { value: 3, label: 'Moyen' },
   { value: 5, label: 'Long' },
 ]
+
+/**
+ * Largeur maximale de l aperçu, bien sous `EXPORT_MAX_EDGE` : le bandeau et la police
+ * étant proportionnels à la largeur de cellule, un rendu à cette taille est
+ * exactement l export en plus petit — jamais une approximation à part.
+ */
+const PREVIEW_MAX_EDGE = 480
+
+/**
+ * Temporisation avant de recalculer l aperçu. Un curseur continu émet des dizaines
+ * d événements par glissement, et chacun déclenche un encodage JPEG complet : sans
+ * ce délai, on réencoderait à chaque pixel parcouru par le doigt.
+ */
+const PREVIEW_DEBOUNCE_MS = 150
 
 /** Réduit un nom libre à un fragment de nom de fichier sûr. */
 function slugify(value: string): string {
@@ -152,6 +175,36 @@ export function CompareScreen() {
       },
     }
   }
+
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+  const previewUrl = useObjectUrl(previewBlob)
+
+  // Aperçu réel de l export : même fonction, même chemin de code, juste une largeur
+  // maximale réduite — c est ce qui garantit que l aperçu et l export ne peuvent pas
+  // diverger. Temporisé pour ne pas réencoder à chaque pixel parcouru par le curseur.
+  useEffect(() => {
+    if (sheet !== 'image' || !ready) return
+    const inputs = inputsFor()
+    if (!inputs || !frame) return
+
+    let cancelled = false
+    const timer = setTimeout(() => {
+      renderSideBySide(inputs.before, inputs.after, frame, options.image, PREVIEW_MAX_EDGE)
+        .then((blob) => {
+          if (!cancelled) setPreviewBlob(blob)
+        })
+        .catch(() => {
+          // Un aperçu manqué reste sans conséquence : l export, lui, resterait signalé
+          // par son propre message d échec.
+          if (!cancelled) setPreviewBlob(null)
+        })
+    }, PREVIEW_DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [sheet, ready, pair, frame, beforeBitmap, afterBitmap, options.image])
 
   async function exportJpeg() {
     const inputs = inputsFor()
@@ -334,6 +387,22 @@ export function CompareScreen() {
       </div>
 
       <Sheet title="Image côte-à-côte" open={sheet === 'image'} onClose={closeSheet}>
+        {/* Hauteur plafonnée : sans ça, un cadre très allongé chasserait les réglages
+            et le bouton d export hors de l écran visible de la feuille. */}
+        <div className="flex max-h-48 justify-center overflow-hidden rounded-lg bg-slate-950/40 p-2">
+          {previewUrl ? (
+            <img
+              data-testid="image-preview"
+              src={previewUrl}
+              alt="Aperçu de l'export image côte-à-côte"
+              className="max-h-44 w-auto object-contain"
+            />
+          ) : (
+            <p className="self-center p-6 text-center text-sm text-slate-400">
+              Préparation de l'aperçu…
+            </p>
+          )}
+        </div>
         <OptionRow
           testId="stamp-mode"
           label="Dates sur l'image"
@@ -348,6 +417,28 @@ export function CompareScreen() {
           options={LAYOUT_LABELS}
           onChange={(layout) => updateOptions({ image: { layout } })}
         />
+        <div className="space-y-2">
+          <label htmlFor="stamp-scale" className="text-sm text-slate-300">
+            Taille du bandeau
+          </label>
+          {/* Curseur continu, et non des tailles prédéfinies : c est précisément un
+              réglage qui se juge à l œil, pas dans une liste d options. Désactivé sans
+              bandeau (`stamp` à « Aucun ») : il n y a alors rien à dimensionner. */}
+          <input
+            id="stamp-scale"
+            type="range"
+            data-testid="stamp-scale"
+            min={STAMP_SCALE_MIN}
+            max={STAMP_SCALE_MAX}
+            step={0.1}
+            value={options.image.stampScale}
+            disabled={options.image.stamp === 'none'}
+            onChange={(event) =>
+              updateOptions({ image: { stampScale: Number(event.target.value) } })
+            }
+            className="w-full disabled:opacity-40"
+          />
+        </div>
         <button
           type="button"
           data-testid="export-jpeg"

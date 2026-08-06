@@ -38,7 +38,7 @@ describe('parseExportOptions', () => {
 
   it('relit une valeur complète', () => {
     const stored = {
-      image: { stamp: 'datetime', layout: 'vertical' },
+      image: { stamp: 'datetime', layout: 'vertical', stampScale: 1.5 },
       video: { transition: 'wipe', width: 1080, reps: 5 },
     }
     expect(parseExportOptions(JSON.stringify(stored))).toEqual(stored)
@@ -64,13 +64,34 @@ describe('parseExportOptions', () => {
     expect(parsed.video.width).toBe(DEFAULT_EXPORT_OPTIONS.video.width)
     expect(parsed.video.reps).toBe(3)
   })
+
+  it('relit une taille de bandeau valide', () => {
+    const parsed = parseExportOptions('{"image":{"stampScale":1.7}}')
+    expect(parsed.image.stampScale).toBe(1.7)
+  })
+
+  it('ramène une taille de bandeau absente, hors bornes ou non numérique au défaut', () => {
+    // `stampScale` n est pas une liste fermée : `oneOf` ne s applique pas, il faut
+    // donc vérifier chaque façon de sortir de l intervalle [0.5, 2].
+    const fallback = DEFAULT_EXPORT_OPTIONS.image.stampScale
+
+    expect(parseExportOptions('{"image":{}}').image.stampScale).toBe(fallback)
+    expect(parseExportOptions('{"image":{"stampScale":0.4}}').image.stampScale).toBe(fallback)
+    expect(parseExportOptions('{"image":{"stampScale":2.1}}').image.stampScale).toBe(fallback)
+    expect(parseExportOptions('{"image":{"stampScale":"1"}}').image.stampScale).toBe(fallback)
+    // `1e400` est un littéral JSON valide, mais dépasse la précision d un flottant
+    // double : `JSON.parse` le rend en `Infinity`, un « nombre » au sens de `typeof`
+    // que seul `Number.isFinite` peut écarter — comme `NaN` le serait s il pouvait
+    // être exprimé en JSON, ce qu il ne peut pas.
+    expect(parseExportOptions('{"image":{"stampScale":1e400}}').image.stampScale).toBe(fallback)
+  })
 })
 
 describe('loadExportOptions / saveExportOptions', () => {
   it('fait un aller-retour fidèle', () => {
     stubStorage()
     const options = {
-      image: { stamp: 'none', layout: 'horizontal' },
+      image: { stamp: 'none', layout: 'horizontal', stampScale: 1.3 },
       video: { transition: 'cut', width: 'full', reps: 1 },
     } as const
 

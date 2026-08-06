@@ -137,6 +137,7 @@ test('renderSideBySide accole deux photos portrait horizontalement', async ({ pa
     const blob = await renderSideBySide(input('#ff0000'), input('#0000ff'), frame, {
       stamp: 'none',
       layout: 'auto',
+      stampScale: 1,
     })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
@@ -169,7 +170,7 @@ test('renderSideBySide empile deux photos paysage verticalement', async ({ page 
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto', stampScale: 1 }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -188,13 +189,45 @@ test('renderSideBySide réserve un bandeau pour les dates', async ({ page }) => 
     const input = { source: bitmap, transform: IDENTITY, takenAt: Date.UTC(2026, 6, 31, 12), shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'date', layout: 'auto' }),
+      await renderSideBySide(input, input, frame, { stamp: 'date', layout: 'auto', stampScale: 1 }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
 
   // Bandeau = round(100 * 0.14) = 14 px sous chaque photo.
   expect(size).toEqual({ width: 208, height: 164 })
+})
+
+test('renderSideBySide agrandit le bandeau proportionnellement à stampScale', async ({ page }) => {
+  const sizes = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderSideBySide } = await import('/src/render/sideBySide.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const bitmap = window.__stripes(100, 150)
+    const input = { source: bitmap, transform: IDENTITY, takenAt: Date.UTC(2026, 6, 31, 12), shot: frame }
+
+    const decode = async (stampScale) => {
+      const decoded = await createImageBitmap(
+        await renderSideBySide(input, input, frame, { stamp: 'date', layout: 'auto', stampScale }),
+      )
+      return { width: decoded.width, height: decoded.height }
+    }
+
+    return { base: await decode(1), doubled: await decode(2), untouched: await decode(1) }
+  }, HELPERS)
+
+  // Non-régression : à stampScale 1, la géométrie est exactement celle d avant ce
+  // changement — le comportement décrit par le test « réserve un bandeau ».
+  expect(sizes.base).toEqual({ width: 208, height: 164 })
+  expect(sizes.untouched).toEqual(sizes.base)
+
+  // Bandeau de base = round(100 * 0.14) = 14 px ; doublé = round(100 * 0.14 * 2) = 28 px.
+  // La hauteur totale doit croître exactement de la différence entre les deux bandeaux,
+  // ni plus (la cellule photo ne bouge pas) ni moins (le doublement doit être honoré).
+  expect(sizes.doubled.width).toBe(sizes.base.width)
+  expect(sizes.doubled.height - sizes.base.height).toBe(28 - 14)
 })
 
 test('renderSideBySide empile un cadre portrait quand la disposition est forcée', async ({
@@ -213,7 +246,7 @@ test('renderSideBySide empile un cadre portrait quand la disposition est forcée
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'vertical' }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'vertical', stampScale: 1 }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -235,7 +268,7 @@ test('renderSideBySide accole un cadre paysage quand la disposition est forcée'
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'horizontal' }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'horizontal', stampScale: 1 }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -264,7 +297,7 @@ test('renderSideBySide garde l heure dans sa cellule sans déborder sur les bord
     }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'datetime', layout: 'auto' }),
+      await renderSideBySide(input, input, frame, { stamp: 'datetime', layout: 'auto', stampScale: 1 }),
     )
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)
     const ctx = canvas.getContext('2d')
@@ -302,7 +335,7 @@ test("renderSideBySide n'agrandit jamais mais réduit au-delà de 2048 px", asyn
     const input = { source: bitmap, transform: IDENTITY, takenAt: 0, shot: frame }
 
     const decoded = await createImageBitmap(
-      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto' }),
+      await renderSideBySide(input, input, frame, { stamp: 'none', layout: 'auto', stampScale: 1 }),
     )
     return { width: decoded.width, height: decoded.height }
   }, HELPERS)
@@ -334,6 +367,7 @@ test('renderSideBySide réduit aussi la translation stockée', async ({ page }) 
     const blob = await renderSideBySide(input(1000), input(-1000), frame, {
       stamp: 'none',
       layout: 'auto',
+      stampScale: 1,
     })
     const decoded = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(decoded.width, decoded.height)

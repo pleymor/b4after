@@ -30,13 +30,18 @@ export function fittedFontSize(
   maxWidth: number,
   startSize: number,
 ): number {
-  let size = startSize
-  // Plancher à 6 px : en dessous le texte est illisible de toute façon, et la boucle
-  // doit se terminer même sur un cadre absurdement étroit.
-  while (size > 6 && measure(size) > maxWidth) {
-    size -= 1
-  }
-  return size
+  const natural = measure(startSize)
+  if (natural <= maxWidth) return startSize
+
+  // Corps fractionnaire, et non le plus grand entier qui tient : un corps entier
+  // n est pas invariant d échelle. À 20 px de départ on retiendrait floor(8,33) = 8,
+  // soit un ratio de 0,400, alors qu à 100 px on retiendrait floor(41,67) = 41, soit
+  // 0,410. L aperçu et l export choisiraient donc des proportions différentes, et
+  // l aperçu mentirait sur le rendu final. Le canevas accepte les corps décimaux.
+  //
+  // Le plancher de 6 px reste absolu, donc lui n est pas invariant d échelle — mais
+  // il ne s engage que sur des cas absurdes où le texte est illisible de toute façon.
+  return Math.max(6, (startSize * maxWidth) / natural)
 }
 
 /**
@@ -69,12 +74,17 @@ export async function renderSideBySide(
   after: ComparisonInput,
   frame: Size,
   options: ImageOptions,
+  // Séparé des `ImageOptions` et non persisté : ce n est pas un réglage utilisateur
+  // mais le point d entrée qui permet à l aperçu de demander un rendu réduit (480 px)
+  // tout en partageant exactement le même code que l export (2048 px). Le défaut
+  // reproduit l appel existant, donc aucun appelant actuel ne change de comportement.
+  maxEdge: number = EXPORT_MAX_EDGE,
 ): Promise<Blob> {
-  const factor = fitFactor(frame, EXPORT_MAX_EDGE)
+  const factor = fitFactor(frame, maxEdge)
   const cellWidth = Math.round(frame.width * factor)
   const cellHeight = Math.round(frame.height * factor)
   const showStamp = options.stamp !== 'none'
-  const bandHeight = showStamp ? Math.round(cellWidth * 0.14) : 0
+  const bandHeight = showStamp ? Math.round(cellWidth * 0.14 * options.stampScale) : 0
 
   // `'auto'` conserve la règle d origine : un cadre en portrait se lit mieux côte à
   // côte, un cadre en paysage empilé.

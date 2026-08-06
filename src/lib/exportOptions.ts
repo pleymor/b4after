@@ -6,7 +6,7 @@ export type VideoWidth = 640 | 1080 | 'full'
 /** Nombre d allers-retours joués à la suite. */
 export type VideoLength = 1 | 3 | 5
 
-export type ImageOptions = { stamp: StampMode; layout: Layout }
+export type ImageOptions = { stamp: StampMode; layout: Layout; stampScale: number }
 export type VideoOptions = { transition: Transition; width: VideoWidth; reps: VideoLength }
 export type ExportOptions = { image: ImageOptions; video: VideoOptions }
 
@@ -17,7 +17,7 @@ export const STORAGE_KEY = 'b4after.exportOptions'
 // trois allers-retours à 640 px. Les changer changerait le rendu de tous ceux qui
 // n ont jamais ouvert une feuille de réglages.
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
-  image: { stamp: 'date', layout: 'auto' },
+  image: { stamp: 'date', layout: 'auto', stampScale: 1 },
   video: { transition: 'crossfade', width: 640, reps: 3 },
 }
 
@@ -26,10 +26,24 @@ export const LAYOUTS: readonly Layout[] = ['auto', 'horizontal', 'vertical']
 export const TRANSITIONS: readonly Transition[] = ['crossfade', 'cut', 'wipe']
 export const VIDEO_WIDTHS: readonly VideoWidth[] = [640, 1080, 'full']
 export const VIDEO_LENGTHS: readonly VideoLength[] = [1, 3, 5]
+export const STAMP_SCALE_MIN = 0.5
+export const STAMP_SCALE_MAX = 2
 
 /** Rend `value` si elle fait partie des valeurs admises, sinon le défaut du champ. */
 function oneOf<T>(allowed: readonly T[], value: unknown, fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback
+}
+
+/**
+ * Rend `value` si c est un nombre fini compris entre `min` et `max`, sinon le défaut
+ * du champ. `oneOf` ne convient pas ici : les valeurs admises ne sont pas une liste
+ * fermée mais un intervalle continu, et `NaN` — un nombre au sens de `typeof` — doit
+ * être rejeté explicitement, faute de quoi toute comparaison le laisserait passer.
+ */
+function numberInRange(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+    ? value
+    : fallback
 }
 
 /** Rend l objet tel quel s il en est un, sinon un objet vide — jamais `null`. */
@@ -61,6 +75,12 @@ export function parseExportOptions(raw: string | null): ExportOptions {
     image: {
       stamp: oneOf(STAMP_MODES, image.stamp, fallback.image.stamp),
       layout: oneOf(LAYOUTS, image.layout, fallback.image.layout),
+      stampScale: numberInRange(
+        image.stampScale,
+        STAMP_SCALE_MIN,
+        STAMP_SCALE_MAX,
+        fallback.image.stampScale,
+      ),
     },
     video: {
       transition: oneOf(TRANSITIONS, video.transition, fallback.video.transition),

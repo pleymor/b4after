@@ -610,6 +610,46 @@ test('mémorise les réglages d export d une visite à l autre', async ({ page }
   ).toHaveAttribute('aria-checked', 'true')
 })
 
+test('un aperçu réel accompagne la feuille image, et le curseur de bandeau en change la hauteur', async ({
+  page,
+}) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-image-options').click()
+  const preview = page.getByTestId('image-preview')
+  await expect(preview).toBeVisible()
+
+  // Attendre que le premier rendu soit décodé, pas seulement que la balise existe :
+  // sans image chargée, `naturalHeight` vaudrait 0 et la comparaison qui suit serait
+  // sans objet.
+  await expect
+    .poll(() => preview.evaluate((el: HTMLImageElement) => el.naturalHeight))
+    .toBeGreaterThan(0)
+  const initialHeight = await preview.evaluate((el: HTMLImageElement) => el.naturalHeight)
+
+  // C est l assertion qui discrimine : un aperçu figé, ou un curseur non câblé au
+  // rendu, laisserait cette hauteur strictement constante. La hauteur du bandeau
+  // alimente la hauteur totale de l image composée, donc doubler l échelle du
+  // bandeau doit se voir ici.
+  await page.getByTestId('stamp-scale').fill('2')
+  await expect
+    .poll(() => preview.evaluate((el: HTMLImageElement) => el.naturalHeight))
+    .not.toBe(initialHeight)
+})
+
+test('le curseur de taille du bandeau est désactivé sans bandeau', async ({ page }) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-image-options').click()
+  await expect(page.getByTestId('stamp-scale')).toBeEnabled()
+
+  // Sans bandeau, il n y a rien à dimensionner.
+  await page.getByTestId('stamp-mode').getByRole('radio', { name: 'Aucun' }).click()
+  await expect(page.getByTestId('stamp-scale')).toBeDisabled()
+})
+
 test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
   // Écran de téléphone : c est là que le problème se posait, l image y prenant
   // presque toute la hauteur utile.
