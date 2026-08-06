@@ -1113,3 +1113,62 @@ test("renderCrossfadeVideo dure plus longtemps au rythme lent qu'au rythme rapid
 
   expect(result.slow).toBeGreaterThan(result.fast)
 })
+
+test('importPhoto ré-encode une photo importée en JPEG, aux dimensions de la source, avec une vignette', async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { importPhoto } = await import('/src/capture/importPhoto.ts')
+
+    // Source en PNG, distincte du JPEG attendu en sortie : ça vérifie que le format
+    // est bien homogénéisé, pas simplement recopié.
+    const bitmap = window.__stripes(640, 480)
+    const canvas = new OffscreenCanvas(640, 480)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bitmap, 0, 0)
+    const pngBlob = await canvas.convertToBlob({ type: 'image/png' })
+    const file = new File([pngBlob], 'photo.png', { type: 'image/png' })
+
+    const captured = await importPhoto(file)
+    const encoded = await captured.encoding.result()
+
+    const decoded = await createImageBitmap(encoded.blob)
+    const thumb = await createImageBitmap(encoded.thumbBlob)
+
+    return {
+      capturedSize: { width: captured.width, height: captured.height },
+      blobType: encoded.blob.type,
+      decodedSize: { width: decoded.width, height: decoded.height },
+      thumbType: encoded.thumbBlob.type,
+      thumbSize: { width: thumb.width, height: thumb.height },
+    }
+  }, HELPERS)
+
+  expect(result.capturedSize).toEqual({ width: 640, height: 480 })
+  expect(result.blobType).toBe('image/jpeg')
+  expect(result.decodedSize).toEqual({ width: 640, height: 480 })
+  expect(result.thumbType).toBe('image/jpeg')
+  expect(result.thumbSize).toEqual({ width: 320, height: 240 })
+})
+
+test('importPhoto rejette un fichier illisible par une erreur, pas par un plantage', async ({
+  page,
+}) => {
+  const message = await page.evaluate(async () => {
+    const { importPhoto } = await import('/src/capture/importPhoto.ts')
+    // Quelques octets sans rapport avec un JPEG : `createImageBitmap` doit rejeter,
+    // pas planter la page.
+    const file = new File([new Uint8Array([1, 2, 3, 4, 5])], 'invalide.jpg', {
+      type: 'image/jpeg',
+    })
+    try {
+      await importPhoto(file)
+      return 'pas d erreur'
+    } catch (error) {
+      return error instanceof Error ? error.message || error.name : String(error)
+    }
+  })
+
+  expect(message).not.toBe('pas d erreur')
+})

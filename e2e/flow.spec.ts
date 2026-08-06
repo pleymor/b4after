@@ -51,6 +51,27 @@ export async function seed(page: import('@playwright/test').Page, name: string) 
   }, name)
 }
 
+/**
+ * Fabrique un PNG valide de dimensions données, pour piloter le sélecteur de photos
+ * via `setInputFiles`. Généré dans la page plutôt qu en dur : le navigateur produit
+ * l encodage, le test n a donc aucun octet à connaître par avance.
+ */
+async function makePngBuffer(
+  page: import('@playwright/test').Page,
+  width: number,
+  height: number,
+): Promise<Buffer> {
+  const bytes = await page.evaluate(async ({ width, height }) => {
+    const canvas = new OffscreenCanvas(width, height)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#336699'
+    ctx.fillRect(0, 0, width, height)
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    return Array.from(new Uint8Array(await blob.arrayBuffer()))
+  }, { width, height })
+  return Buffer.from(bytes)
+}
+
 test.beforeEach(async ({ page }) => {
   await resetDb(page)
 })
@@ -153,6 +174,130 @@ test('crée un point de vue depuis la première photo', async ({ page }) => {
   expect(stored.frame).toEqual(native)
   expect(stored.shot).toEqual(native)
   expect(stored.transform).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
+})
+
+test('importe une photo existante comme référence', async ({ page }) => {
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  // Dimensions volontairement distinctes de toute résolution caméra : c est bien le
+  // fichier importé, et non un flux vidéo, qui doit définir le cadre canonique.
+  const buffer = await makePngBuffer(page, 517, 349)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  const sheet = page.getByTestId('name-sheet')
+  await expect(sheet).toBeVisible()
+  await page.getByTestId('name-confirm').click()
+
+  await expect(page.getByTestId('viewpoint-item')).toContainText('1 photo')
+
+  const stored = await page.evaluate(async () => {
+    const { listViewpoints } = await import('/src/db/viewpoints.ts')
+    const [viewpoint] = await listViewpoints()
+    return { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
+  })
+
+  expect(stored).toEqual({ width: 517, height: 349 })
+})
+
+test('importe une photo existante en reprise sans rien écrire avant validation du calage', async ({
+  page,
+}) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.reload()
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+
+  await page.getByTestId('retake').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/capture$`))
+
+  const buffer = await makePngBuffer(page, 640, 480)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  // Même invariant qu une prise : l écran de calage s ouvre avant toute écriture.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`))
+
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(1)
+})
+
+test('le bouton d import survit au refus de la caméra, sur l écran de référence', async ({
+  page,
+}) => {
+  // Neutraliser `getUserMedia` avant tout chargement de page : une fois le document
+  // chargé, la navigation vers l écran de capture est purement côté client (routeur
+  // React), donc rien ne rechargerait le script d init à temps.
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('refusé', 'NotAllowedError'))
+  })
+  // Le `beforeEach` du fichier a déjà chargé la page avant l installation du script
+  // ci-dessus : sans reprendre `resetDb` ici, le mock ne s appliquerait jamais.
+  await resetDb(page)
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  await expect(page.getByTestId('camera-denied')).toBeVisible()
+  await expect(page.getByTestId('shutter')).toHaveCount(0)
+
+  // Le bouton d import doit rester là, et fonctionner exactement comme sans refus.
+  const buffer = await makePngBuffer(page, 480, 360)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  const sheet = page.getByTestId('name-sheet')
+  await expect(sheet).toBeVisible()
+  await page.getByTestId('name-confirm').click()
+
+  await expect(page.getByTestId('viewpoint-item')).toContainText('1 photo')
+
+  const stored = await page.evaluate(async () => {
+    const { listViewpoints } = await import('/src/db/viewpoints.ts')
+    const [viewpoint] = await listViewpoints()
+    return { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
+  })
+  expect(stored).toEqual({ width: 480, height: 360 })
+})
+
+test('le bouton d import survit au refus de la caméra, sur l écran de reprise', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('refusé', 'NotAllowedError'))
+  })
+  const { viewpointId } = await seed(page, 'Façade nord')
+  // `seed` n écrit qu en IndexedDB, sans navigation : le mock n est pris en compte
+  // qu à partir de ce rechargement.
+  await page.reload()
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+
+  await page.getByTestId('retake').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/capture$`))
+
+  await expect(page.getByTestId('camera-denied')).toBeVisible()
+  await expect(page.getByTestId('shutter')).toHaveCount(0)
+
+  const buffer = await makePngBuffer(page, 500, 375)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  // Même invariant qu une prise : rien n est écrit avant validation du calage.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`))
+
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(1)
 })
 
 test('le fantôme montre la dernière photo, pas la première', async ({ page }) => {
