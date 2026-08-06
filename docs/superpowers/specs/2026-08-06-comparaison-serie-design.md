@@ -43,6 +43,25 @@ conformément au spec d'origine : une bande de cinq photos portrait fait donc pr
 dernière. Durée totale `N × palier + (N-1) × fondu`. Les réglages existants — rythme,
 durée d'affichage, transition, largeur — s'appliquent inchangés.
 
+## Résolution de l'image exportée
+
+La bande complète rend le poids du fichier bien plus sensible qu'avec deux photos : à
+2048 px par photo, cinq photos portrait approchent les 8000 px de large. La feuille
+image gagne donc une ligne « Largeur », pendant exact de celle de la vidéo :
+
+| Valeur | Libellé | Plafond **par photo** |
+| --- | --- | --- |
+| `1024` | Standard | 1024 px |
+| `2048` | Haute | 2048 px |
+| `'full'` | Maximale | dimensions du cadre, sans plafond |
+
+Défaut : `2048`, qui reproduit exactement le comportement actuel — personne ne voit son
+rendu changer sans l'avoir demandé.
+
+Le plafond reste **par photo** et non sur l'image composée, conformément au spec
+d'origine ; le réglage donne simplement la main sur sa valeur. `EXPORT_MAX_EDGE` cesse
+d'être une constante imposée pour devenir le défaut de l'option.
+
 ## Mémoire : le vrai risque de ce changement
 
 Jusqu'ici l'app ne décodait jamais plus de deux photos à la fois. Une série de dix
@@ -68,7 +87,9 @@ recevoir des bitmaps déjà décodés.
   filtre irait contre.
 - Pas de changement du GIF au-delà du parcours de la série.
 - Pas de grille ni de plafond global sur l'image côte-à-côte : le choix retenu est la
-  bande complète à pleine résolution.
+  bande complète, dont la résolution se règle par photo.
+- Pas de réglage de la résolution de **stockage** : les photos restent enregistrées en
+  pleine résolution. Seul le fichier partagé est concerné.
 
 ## Tests
 
