@@ -39,7 +39,7 @@ describe('parseExportOptions', () => {
   it('relit une valeur complète', () => {
     const stored = {
       image: { stamp: 'datetime', layout: 'vertical', stampScale: 1.5 },
-      video: { transition: 'wipe', width: 1080, reps: 5, pace: 'slow' },
+      video: { transition: 'wipe', width: 1080, hold: 'long', pace: 'slow' },
     }
     expect(parseExportOptions(JSON.stringify(stored))).toEqual(stored)
   })
@@ -56,13 +56,26 @@ describe('parseExportOptions', () => {
     // Le cœur de la fonction : une version future ou un bricolage à la main ne doit
     // pas faire perdre les réglages voisins, ni vider l écran de comparaison.
     const parsed = parseExportOptions(
-      '{"image":{"stamp":"martien","layout":"vertical"},"video":{"width":9999,"reps":3}}',
+      '{"image":{"stamp":"martien","layout":"vertical"},"video":{"width":9999,"hold":"long"}}',
     )
 
     expect(parsed.image.stamp).toBe(DEFAULT_EXPORT_OPTIONS.image.stamp)
     expect(parsed.image.layout).toBe('vertical')
     expect(parsed.video.width).toBe(DEFAULT_EXPORT_OPTIONS.video.width)
-    expect(parsed.video.reps).toBe(3)
+    expect(parsed.video.hold).toBe('long')
+  })
+
+  it('ignore un reps résiduel du stockage sans faire échouer la validation', () => {
+    // Un utilisateur existant a `reps` dans son `localStorage` depuis avant le
+    // passage unique : l objet est reconstruit champ par champ à partir des clés
+    // connues, donc un champ retiré du modèle est simplement absent du résultat,
+    // sans faire retomber toute la section vidéo sur ses défauts.
+    const parsed = parseExportOptions(
+      '{"video":{"reps":5,"transition":"wipe","width":1080,"pace":"slow","hold":"long"}}',
+    )
+
+    expect(parsed.video).toEqual({ transition: 'wipe', width: 1080, pace: 'slow', hold: 'long' })
+    expect('reps' in parsed.video).toBe(false)
   })
 
   it('rend le rythme par défaut sur une valeur absente, inconnue ou mal typée', () => {
@@ -73,6 +86,15 @@ describe('parseExportOptions', () => {
     expect(parseExportOptions('{"video":{}}').video.pace).toBe(fallback)
     expect(parseExportOptions('{"video":{"pace":"turbo"}}').video.pace).toBe(fallback)
     expect(parseExportOptions('{"video":{"pace":42}}').video.pace).toBe(fallback)
+  })
+
+  it('rend la durée par défaut sur une valeur absente, inconnue ou mal typée', () => {
+    // Même principe que `pace` ci-dessus, pour le réglage qui l a remplacé.
+    const fallback = DEFAULT_EXPORT_OPTIONS.video.hold
+
+    expect(parseExportOptions('{"video":{}}').video.hold).toBe(fallback)
+    expect(parseExportOptions('{"video":{"hold":"turbo"}}').video.hold).toBe(fallback)
+    expect(parseExportOptions('{"video":{"hold":42}}').video.hold).toBe(fallback)
   })
 
   it('relit une taille de bandeau valide', () => {
@@ -102,7 +124,7 @@ describe('loadExportOptions / saveExportOptions', () => {
     stubStorage()
     const options = {
       image: { stamp: 'none', layout: 'horizontal', stampScale: 1.3 },
-      video: { transition: 'cut', width: 'full', reps: 1, pace: 'fast' },
+      video: { transition: 'cut', width: 'full', hold: 'short', pace: 'fast' },
     } as const
 
     saveExportOptions(options)

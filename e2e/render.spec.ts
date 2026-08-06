@@ -536,8 +536,8 @@ test('renderCrossfadeVideo produit un MP4 non trivial', async ({ page }) => {
 
   expect(result.type.startsWith('video/mp4')).toBe(true)
   // Un fichier trivial (quelques octets d en-tête vide) trahirait un flux jamais
-  // vraiment enregistré ; quelques ko pour ~5,7 s de vidéo 100x150 (rythme normal) est
-  // le bon ordre de grandeur.
+  // vraiment enregistré ; quelques ko pour ~3,6 s de vidéo 100x150 (durée moyenne,
+  // rythme normal) est le bon ordre de grandeur.
   expect(result.size).toBeGreaterThan(1000)
   expect(result.progress.length).toBeGreaterThan(0)
   const [done, total] = result.progress.at(-1)
@@ -635,10 +635,10 @@ test('renderCrossfadeVideo anime réellement : les frames ne sont pas identiques
     }
 
     // Le premier palier ("avant" pur, tout au début) et un point pris au milieu du
-    // premier fondu (palier de 0 à 0,7 s, fondu de 0,7 à 1,9 s à rythme normal) : une
-    // vidéo réellement figée renverrait le même pixel aux deux instants.
+    // fondu (palier de 0 à 1,2 s, fondu de 1,2 à 2,4 s à durée moyenne et rythme
+    // normal) : une vidéo réellement figée renverrait le même pixel aux deux instants.
     const start = await sampleAt(0.05)
-    const end = await sampleAt(1.3)
+    const end = await sampleAt(1.8)
 
     URL.revokeObjectURL(url)
     return { start, end }
@@ -724,7 +724,7 @@ test('renderCrossfadeGif balaie l image au lieu de la fondre', async ({ page }) 
 test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
   const result = await page.evaluate(async (helpers) => {
     eval(helpers)
-    const { renderCrossfadeVideo, VIDEO_HOLD_MS } = await import('/src/render/video.ts')
+    const { renderCrossfadeVideo, HOLD_DURATION_MS } = await import('/src/render/video.ts')
     const { IDENTITY } = await import('/src/align/transform.ts')
 
     const frame = { width: 100, height: 150 }
@@ -742,16 +742,15 @@ test('renderCrossfadeVideo accepte une coupe franche', async ({ page }) => {
       onProgress: (done, total) => progress.push([done, total]),
     })
 
-    return { type: blob.type, size: blob.size, progress, VIDEO_HOLD_MS }
+    return { type: blob.type, size: blob.size, progress, holdMs: HOLD_DURATION_MS.medium }
   }, HELPERS)
 
   expect(result.type.startsWith('video/mp4')).toBe(true)
   expect(result.size).toBeGreaterThan(1000)
-  // 3 allers-retours x 1 palier, aucune frame de transition, plus le palier final qui
-  // montre l après (voir le test dédié plus bas) : (3 + 1) paliers de VIDEO_HOLD_MS. La
-  // progression est temporelle, pas un compte de paliers : elle rapporte le temps
-  // écoulé au temps total prévu.
-  expect(result.progress.at(-1)).toEqual([4 * result.VIDEO_HOLD_MS, 4 * result.VIDEO_HOLD_MS])
+  // Un seul passage : palier sur l avant, aucune frame de transition (coupe franche),
+  // palier sur l après — deux paliers de `holdMs` (durée par défaut, moyenne).
+  // Progression temporelle, pas un compte de paliers.
+  expect(result.progress.at(-1)).toEqual([2 * result.holdMs, 2 * result.holdMs])
 })
 
 test('renderCrossfadeGif élargit à 1080 px sur demande', async ({ page }) => {
@@ -825,12 +824,42 @@ test("renderCrossfadeGif plafonne à 1080 px même en qualité maximale", async 
   expect(size).toEqual({ width: 1080, height: 720 })
 })
 
-test("renderCrossfadeVideo joue le nombre d'allers-retours demandé, et montre bien l'après en coupe", async ({
+/** Chrome ne fiabilise pas toujours la durée d un MP4 issu de `MediaRecorder` dans ses
+ *  métadonnées de chargement ; se déplacer très loin force son recalcul depuis les
+ *  échantillons du flux. Même recalculée, cette durée reste une sous-estimation
+ *  significative de la durée réelle (vérifié à la main : ~30 % de moins qu un
+ *  chronométrage `performance.now()` autour de l appel, pourtant exact lui) — un
+ *  artefact propre à ce mécanisme de relecture, pas à l enregistrement. Elle ne sert
+ *  donc ici qu à une comparaison relative entre deux vidéos, jamais à une valeur
+ *  absolue. Injectée dans la page comme le reste, pour rester réutilisable d un test à
+ *  l autre sans dépendre d un import de module. */
+const DURATION_HELPER = `
+  window.__durationOf = async (blob) => {
+    const url = URL.createObjectURL(blob)
+    const video = document.createElement('video')
+    video.muted = true
+    video.src = url
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', resolve, { once: true })
+      video.addEventListener('error', () => reject(video.error), { once: true })
+    })
+    if (!Number.isFinite(video.duration)) {
+      await new Promise((resolve) => {
+        video.addEventListener('durationchange', resolve, { once: true })
+        video.currentTime = 1e101
+      })
+    }
+    const duration = video.duration
+    URL.revokeObjectURL(url)
+    return duration
+  }
+`
+
+test('renderCrossfadeVideo dure hold + fondu + hold, à la tolérance d encodage près', async ({
   page,
 }) => {
-  const result = await page.evaluate(async (helpers) => {
-    eval(helpers)
-    const { renderCrossfadeVideo, VIDEO_HOLD_MS } = await import('/src/render/video.ts')
+  const result = await page.evaluate(async () => {
+    const { renderCrossfadeVideo, HOLD_DURATION_MS } = await import('/src/render/video.ts')
     const { IDENTITY } = await import('/src/align/transform.ts')
 
     const frame = { width: 100, height: 150 }
@@ -842,15 +871,91 @@ test("renderCrossfadeVideo joue le nombre d'allers-retours demandé, et montre b
       return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
     }
 
-    const progress = []
-    // `transition: 'cut'` pour que le test reste court : un palier par aller-retour,
-    // aucune frame de fondu. Des couleurs franches et différentes pour l avant et
-    // l après : c est le seul moyen de prouver que le palier final montre bien l après,
-    // et non le dernier avant simplement tenu plus longtemps.
+    // Le temps réel mis par la fonction elle-même, pas la durée relue depuis le blob
+    // produit : un MP4 issu de `MediaRecorder` ne restitue pas de façon fiable sa
+    // propre durée totale, même en forçant son recalcul (voir `durationOf` plus bas,
+    // qui reste correct en comparaison relative mais pas en valeur absolue).
+    const startedAt = performance.now()
+    await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+      transition: 'crossfade',
+      pace: 'normal',
+      hold: 'short',
+    })
+    const elapsedMs = performance.now() - startedAt
+
+    return { elapsedMs, holdMs: HOLD_DURATION_MS.short }
+  })
+
+  // Durée courte (700 ms) + fondu normal (1200 ms) + durée courte (700 ms) = 2,6 s.
+  const expectedMs = 2 * result.holdMs + 1200
+  expect(Math.abs(result.elapsedMs - expectedMs)).toBeLessThan(300)
+})
+
+test('renderCrossfadeVideo dure plus longtemps avec une durée de photos longue que courte, à rythme égal', async ({
+  page,
+}) => {
+  const result = await page.evaluate(
+    async (helpers) => {
+      eval(helpers)
+      const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+      const { IDENTITY } = await import('/src/align/transform.ts')
+
+      const frame = { width: 100, height: 150 }
+      const solid = (color) => {
+        const canvas = new OffscreenCanvas(100, 150)
+        const ctx = canvas.getContext('2d')
+        ctx.fillStyle = color
+        ctx.fillRect(0, 0, 100, 150)
+        return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+      }
+
+      // `cut`, pas `crossfade` : la durée d affichage est ainsi le seul facteur en jeu,
+      // sans le bruit d un fondu dont la durée dépend du rythme.
+      const long = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+        transition: 'cut',
+        hold: 'long',
+      })
+      const short = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
+        transition: 'cut',
+        hold: 'short',
+      })
+
+      return { long: await window.__durationOf(long), short: await window.__durationOf(short) }
+    },
+    HELPERS + DURATION_HELPER,
+  )
+
+  expect(result.long).toBeGreaterThan(result.short)
+})
+
+test("renderCrossfadeVideo se termine sur le palier de l'après, pas sur la fin de la transition", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = (color) => {
+      const canvas = new OffscreenCanvas(100, 150)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, 100, 150)
+      return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
+    }
+
+    // `transition: 'cut'`, et non `crossfade` : un fondu force déjà sa toute dernière
+    // frame à l état exact `mixEnd` (voir `animateFade`), ce qui masquerait un palier
+    // final manquant — la vidéo se terminerait toujours sur un bleu net, correctifié
+    // ou pas. La coupe, elle, n a que le dessin explicite fait juste avant le palier :
+    // sans ce palier pour lui laisser le temps d être capturé par `captureStream`, la
+    // vidéo s arrête sur la dernière frame effectivement échantillonnée, qui reste
+    // l avant. Couleurs franches et opposées pour l avant (rouge) et l après (bleu) :
+    // aucune ambiguïté possible sur ce qui est montré.
     const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
-      reps: 1,
       transition: 'cut',
-      onProgress: (done, total) => progress.push([done, total]),
+      hold: 'short',
     })
 
     const url = URL.createObjectURL(blob)
@@ -873,29 +978,22 @@ test("renderCrossfadeVideo joue le nombre d'allers-retours demandé, et montre b
       return window.__pixel(ctx, Math.floor(video.videoWidth / 2), Math.floor(video.videoHeight / 2))
     }
 
-    // Avec `reps: 1`, la boucle ne dessine qu un seul palier (l avant, tenu
-    // VIDEO_HOLD_MS) ; le palier ajouté par le correctif — l après — le suit
-    // immédiatement, sur le VIDEO_HOLD_MS suivant. On échantillonne donc peu après
-    // chaque frontière, avec assez de marge pour rester insensible à la latence de
-    // démarrage de l enregistrement.
-    const start = await sampleAt(0.1)
-    const end = await sampleAt((VIDEO_HOLD_MS + 200) / 1000)
+    // Un temps hors de portée, pas `video.duration - epsilon` : ce dernier s est
+    // révélé peu fiable à la main pour un MP4 issu de `MediaRecorder` (voir le
+    // commentaire sur `DURATION_HELPER` plus haut, qui sous-estime la durée réelle) —
+    // au point de parfois retomber dans le palier du milieu plutôt qu à la fin.
+    // Chercher directement une position hors de portée force le navigateur à se
+    // caler sur la toute dernière image réellement disponible, sans passer par cette
+    // lecture de durée.
+    const end = await sampleAt(1e101)
 
     URL.revokeObjectURL(url)
-    return { start, end, progress, VIDEO_HOLD_MS }
+    return { end }
   }, HELPERS)
 
-  // 1 aller-retour (le palier « avant ») plus le palier final ajouté par le correctif :
-  // sans lui la barre de progression n aurait jamais atteint 100 %. Progression
-  // temporelle : (1 + 1) paliers de VIDEO_HOLD_MS, pas un compte de 2 paliers franchis.
-  expect(result.progress.at(-1)).toEqual([2 * result.VIDEO_HOLD_MS, 2 * result.VIDEO_HOLD_MS])
-  // Preuve directe que la coupe se lit bien avant → après même avec un seul
-  // aller-retour : sans le correctif, `end` resterait rouge comme `start`. Des seuils,
-  // pas une égalité stricte : l encodage H.264 introduit un bruit de quantification
-  // YUV qui décale chaque canal de quelques niveaux (`#ff0000` ressort par exemple en
-  // ~[254, 1, 1]).
-  expect(result.start[0]).toBeGreaterThan(200)
-  expect(result.start[2]).toBeLessThan(50)
+  // Bleu franc, pas rouge : des seuils sur chaque canal, pas une égalité stricte,
+  // absorbent le bruit de quantification YUV de l encodage H.264 (`#0000ff` ressort
+  // par exemple en ~[1, 1, 254]).
   expect(result.end[2]).toBeGreaterThan(200)
   expect(result.end[0]).toBeLessThan(50)
 })
@@ -917,11 +1015,12 @@ test('renderCrossfadeVideo anime en continu : deux instants rapprochés au milie
       return { source: canvas.transferToImageBitmap(), transform: IDENTITY, takenAt: 0, shot: frame }
     }
 
-    // Rythme et transition explicites, même s ils reprennent les défauts : la fenêtre
-    // de fondu utilisée plus bas (0,7-1,9 s) en dépend directement.
+    // Rythme, transition et durée explicites, même s ils reprennent les défauts : la
+    // fenêtre de fondu utilisée plus bas (1,2-2,4 s) en dépend directement.
     const blob = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
       transition: 'crossfade',
       pace: 'normal',
+      hold: 'medium',
     })
 
     const url = URL.createObjectURL(blob)
@@ -944,15 +1043,13 @@ test('renderCrossfadeVideo anime en continu : deux instants rapprochés au milie
       return window.__pixel(ctx, Math.floor(video.videoWidth / 2), Math.floor(video.videoHeight / 2))
     }
 
-    // Deux instants à 40 ms d écart, choisis pour tomber au milieu d un même palier de
-    // l ancien modèle en 8 paliers de 80 ms (fondu 0,5-1,14 s, paliers de 80 ms : 0,85
-    // et 0,89 s tombent tous deux dans le palier 820-900 ms) tout en restant dans la
-    // fenêtre de fondu du nouveau modèle (0,7-1,9 s à rythme normal). C est l assertion
-    // qui discrimine : avec l ancien modèle, ces deux instants rendraient le même
-    // pixel ; avec une animation pilotée par le temps écoulé, ils ne peuvent pas
-    // coïncider.
-    const first = await sampleAt(0.85)
-    const second = await sampleAt(0.89)
+    // Deux instants à 40 ms d écart, tous deux dans la fenêtre de fondu (1,2-2,4 s à
+    // durée moyenne et rythme normal). C est l assertion qui discrimine : une
+    // animation par paliers fixes rendrait le même pixel aux deux instants tant qu ils
+    // tombent dans le même palier ; une animation pilotée par le temps écoulé ne peut
+    // pas produire deux pixels identiques à deux instants différents du fondu.
+    const first = await sampleAt(1.5)
+    const second = await sampleAt(1.54)
 
     URL.revokeObjectURL(url)
     return { first, second }
@@ -1005,12 +1102,10 @@ test("renderCrossfadeVideo dure plus longtemps au rythme lent qu'au rythme rapid
     const slow = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
       transition: 'crossfade',
       pace: 'slow',
-      reps: 1,
     })
     const fast = await renderCrossfadeVideo(solid('#ff0000'), solid('#0000ff'), frame, {
       transition: 'crossfade',
       pace: 'fast',
-      reps: 1,
     })
 
     return { slow: await durationOf(slow), fast: await durationOf(fast) }

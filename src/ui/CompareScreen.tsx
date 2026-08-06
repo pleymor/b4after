@@ -9,11 +9,11 @@ import { formatDate } from '@/lib/format'
 import {
   STAMP_SCALE_MAX,
   STAMP_SCALE_MIN,
+  type HoldDuration,
   type Layout,
   type Pace,
   type StampMode,
   type Transition,
-  type VideoLength,
   type VideoWidth,
 } from '@/lib/exportOptions'
 import { renderCrossfadeGif } from '@/render/gif'
@@ -52,10 +52,10 @@ const WIDTH_LABELS: readonly { value: VideoWidth; label: string }[] = [
   { value: 'full', label: 'Maximale' },
 ]
 
-const LENGTH_LABELS: readonly { value: VideoLength; label: string }[] = [
-  { value: 1, label: 'Court' },
-  { value: 3, label: 'Moyen' },
-  { value: 5, label: 'Long' },
+const HOLD_LABELS: readonly { value: HoldDuration; label: string }[] = [
+  { value: 'short', label: 'Courte' },
+  { value: 'medium', label: 'Moyenne' },
+  { value: 'long', label: 'Longue' },
 ]
 
 const PACE_LABELS: readonly { value: Pace; label: string }[] = [
@@ -472,16 +472,16 @@ export function CompareScreen() {
           options={WIDTH_LABELS}
           onChange={(width) => updateOptions({ video: { width } })}
         />
-        {/* La durée ne s applique pas au repli GIF : il boucle à l infini, des
-            allers-retours en plus n ajouteraient que du poids. On ne montre donc pas
-            un réglage qui resterait sans effet sur ce navigateur. */}
+        {/* La durée d affichage ne s applique pas au repli GIF : il boucle à l infini
+            en paliers fixes, ce réglage y resterait sans effet. On ne montre donc pas
+            une ligne qui n aurait aucune prise sur ce navigateur. */}
         {videoSupported && (
           <OptionRow
-            testId="video-length"
-            label="Durée"
-            value={options.video.reps}
-            options={LENGTH_LABELS}
-            onChange={(reps) => updateOptions({ video: { reps } })}
+            testId="video-hold"
+            label="Durée des photos"
+            value={options.video.hold}
+            options={HOLD_LABELS}
+            onChange={(hold) => updateOptions({ video: { hold } })}
           />
         )}
         {/* Comme la durée ci-dessus : le rythme n a aucun effet sur le repli GIF, qui

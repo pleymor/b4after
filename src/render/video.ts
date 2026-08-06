@@ -1,4 +1,4 @@
-import type { Pace, Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
+import type { HoldDuration, Pace, Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
 import { drawTransition, scaleInput, targetWidth, type ScaledInput } from './crossfade'
 import { GIF_MAX_WIDTH } from './gif'
@@ -8,10 +8,14 @@ import type { ComparisonInput } from './sideBySide'
 // deux exports est EXPORT_MAX_EDGE, appliqué dans targetWidth.
 export const VIDEO_MAX_WIDTH = GIF_MAX_WIDTH
 
-// Palier tenu entre deux fondus, le même quel que soit le rythme choisi : seul le
-// fondu accélère ou ralentit, le temps de voir chaque photo avant que ça reparte reste
-// constant (voir la spec de fluidité vidéo).
-export const VIDEO_HOLD_MS = 700
+// Durée du palier tenu avant et après la transition, selon le réglage choisi. Le même
+// réglage pilote les deux paliers : pas de contrôle indépendant pour l avant et
+// l après (voir la spec du passage unique).
+export const HOLD_DURATION_MS: Record<HoldDuration, number> = {
+  short: 700,
+  medium: 1200,
+  long: 2000,
+}
 
 // Durée du fondu selon le rythme choisi. Propre à la vidéo : le GIF garde son propre
 // modèle en paliers (voir GIF_STEPS et transitionSteps dans gif.ts et crossfade.ts),
@@ -118,14 +122,15 @@ function animateFade(
 }
 
 /**
- * Transition (fondu, coupe ou balayage) de l avant vers l après, en va-et-vient
- * (avant → après → avant → …), dessinée en temps réel sur un canevas détaché, capturée
- * et encodée par `MediaRecorder`. Rejouée le nombre de fois spécifié par `reps` pour
- * qu une seule lecture se lise déjà comme une animation plutôt qu un clignement.
+ * Transition (fondu, coupe ou balayage) de l avant vers l après, en un seul passage
+ * (palier sur l avant → transition → palier sur l après), dessinée en temps réel sur
+ * un canevas détaché, capturée et encodée par `MediaRecorder`. Un seul passage suffit
+ * au propos d une comparaison avant/après ; un aller-retour supplémentaire n ajoute
+ * que de la longueur (voir la spec du passage unique).
  *
- * Le fondu suit le temps écoulé (voir `animateFade`) et non un nombre fixe de paliers ;
- * `pace` choisit sa durée. Le palier, lui, dure toujours `VIDEO_HOLD_MS` quel que soit
- * le rythme choisi.
+ * Le fondu suit le temps écoulé (voir `animateFade`) et non un nombre fixe de
+ * paliers ; `pace` choisit sa durée. Le palier, lui, dure `HOLD_DURATION_MS[hold]`,
+ * le même avant et après quel que soit le rythme choisi.
  */
 export async function renderCrossfadeVideo(
   before: ComparisonInput,
@@ -134,7 +139,7 @@ export async function renderCrossfadeVideo(
   options: {
     transition?: Transition
     width?: VideoWidth
-    reps?: VideoLength
+    hold?: HoldDuration
     pace?: Pace
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
@@ -154,17 +159,13 @@ export async function renderCrossfadeVideo(
   const to = scaleInput(after, widthFactor)
   const transition = options.transition ?? 'crossfade'
   const pace = options.pace ?? 'normal'
+  const holdMs = HOLD_DURATION_MS[options.hold ?? 'medium']
 
   // Coupe franche : aucun état intermédiaire à représenter, donc aucun fondu à étaler
   // dans le temps. `pace` reste donc sans effet sur cette transition, volontairement :
   // accélérer ou ralentir un fondu qui n existe pas n aurait pas de sens. Le palier,
-  // lui, reste à VIDEO_HOLD_MS pour les trois transitions.
+  // lui, s applique aux trois transitions.
   const fadeMs = transition === 'cut' ? 0 : FADE_DURATION_MS[pace]
-
-  // Trois allers-retours par défaut, soit environ 5,7 s à rythme normal : un seul aller
-  // ne dure que le temps d'une prise plus un fondu et se lit comme un instantané figé
-  // plutôt que comme une animation.
-  const reps = options.reps ?? 3
 
   // `captureStream` n existe que sur l élément DOM, pas sur `OffscreenCanvas` :
   // contrairement au GIF, cet export doit passer par un vrai canevas, ici jamais
@@ -189,13 +190,9 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  // Un aller-retour vaut palier + fondu. Pour une coupe franche (`fadeMs === 0`), la
-  // boucle ne dessine que le palier de *départ* de chaque aller-retour ; l état atteint
-  // après le dernier aller-retour n est donc jamais dessiné par la boucle elle-même
-  // (voir plus bas). D où le palier supplémentaire : sans lui la barre de progression
-  // n atteindrait jamais 100 %. `crossfade` et `wipe` n en ont pas besoin : leur
-  // dernière frame de fondu dessine déjà l état final.
-  const totalMs = fadeMs === 0 ? reps * VIDEO_HOLD_MS + VIDEO_HOLD_MS : reps * (VIDEO_HOLD_MS + fadeMs)
+  // Un seul passage : palier sur l avant, fondu (éventuellement nul en coupe franche),
+  // palier sur l après.
+  const totalMs = 2 * holdMs + fadeMs
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -227,49 +224,44 @@ export async function renderCrossfadeVideo(
 
     recorder.start()
     ;(async () => {
-      // Temps de vidéo déjà couvert par les allers-retours précédents : la progression
-      // rapporte ce temps écoulé à `totalMs`, pas un compte de paliers franchis, pour
-      // rester une mesure temporelle fidèle même quand un fondu dure des secondes.
+      // Temps de vidéo déjà couvert par le palier ou le fondu précédent : la
+      // progression rapporte ce temps écoulé à `totalMs`, pas un compte de paliers
+      // franchis, pour rester une mesure temporelle fidèle même quand un fondu dure
+      // des secondes.
       let elapsed = 0
-      let mix = 0
-      for (let rep = 0; rep < reps; rep += 1) {
-        const target = 1 - mix
 
-        drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(VIDEO_HOLD_MS, options.signal)
-        elapsed += VIDEO_HOLD_MS
-        options.onProgress?.(elapsed, totalMs)
+      drawTransition(ctx, from, to, { width, height }, 0, transition)
+      await wait(holdMs, options.signal)
+      elapsed += holdMs
+      options.onProgress?.(elapsed, totalMs)
 
-        if (fadeMs > 0) {
-          const base = elapsed
-          await animateFade(
-            ctx,
-            from,
-            to,
-            { width, height },
-            mix,
-            target,
-            transition,
-            fadeMs,
-            options.signal,
-            (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
-          )
-          elapsed = base + fadeMs
-        }
-
-        mix = target
+      if (fadeMs > 0) {
+        await animateFade(
+          ctx,
+          from,
+          to,
+          { width, height },
+          0,
+          1,
+          transition,
+          fadeMs,
+          options.signal,
+          (fadeElapsed) => options.onProgress?.(elapsed + fadeElapsed, totalMs),
+        )
+        elapsed += fadeMs
+      } else {
+        // Coupe franche : aucun fondu à animer, on bascule directement sur l état final
+        // avant le palier qui le tient.
+        drawTransition(ctx, from, to, { width, height }, 1, transition)
       }
 
-      // Coupe franche : `fadeMs` vaut 0, donc la boucle ci-dessus n a dessiné que les
-      // paliers de *départ* de chaque aller-retour, jamais l état atteint après le
-      // dernier. Sans ce palier, la vidéo s arrêterait sur le dernier avant affiché et
-      // ne montrerait jamais l après, même si `mix` vaut bien `target` à ce point.
-      if (fadeMs === 0) {
-        drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(VIDEO_HOLD_MS, options.signal)
-        elapsed += VIDEO_HOLD_MS
-        options.onProgress?.(elapsed, totalMs)
-      }
+      // Le palier final : c est lui qui garantit que la vidéo se termine sur l après,
+      // et non sur la dernière image de la transition. Sans lui, un fondu s arrêterait
+      // net à `mix === 1` — une seule frame — et une coupe ne montrerait jamais l après
+      // du tout.
+      await wait(holdMs, options.signal)
+      elapsed += holdMs
+      options.onProgress?.(elapsed, totalMs)
 
       stopRecorder()
     })().catch(fail)
