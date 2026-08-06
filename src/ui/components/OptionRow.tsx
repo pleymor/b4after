@@ -9,12 +9,15 @@ export function OptionRow<T extends string | number>({
   options,
   onChange,
   testId,
+  disabled,
 }: {
   label: string
   value: T
   options: readonly { value: T; label: string }[]
   onChange: (value: T) => void
   testId?: string
+  /** Comme `stamp-scale` : un réglage sans effet ne doit pas rester actionnable. */
+  disabled?: boolean
 }) {
   return (
     <div className="space-y-2" data-testid={testId}>
@@ -31,8 +34,9 @@ export function OptionRow<T extends string | number>({
               role="radio"
               aria-checked={selected}
               data-value={option.value}
+              disabled={disabled}
               onClick={() => onChange(option.value)}
-              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
+              className={`flex-1 rounded-lg border px-3 py-2 text-sm disabled:opacity-40 ${
                 selected
                   ? 'border-sky-400 bg-sky-500/15 text-sky-100'
                   : 'border-slate-600 text-slate-300'

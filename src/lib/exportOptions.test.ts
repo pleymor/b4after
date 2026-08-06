@@ -39,7 +39,7 @@ describe('parseExportOptions', () => {
   it('relit une valeur complète', () => {
     const stored = {
       image: { stamp: 'datetime', layout: 'vertical', stampScale: 1.5 },
-      video: { transition: 'wipe', width: 1080, reps: 5 },
+      video: { transition: 'wipe', width: 1080, reps: 5, pace: 'slow' },
     }
     expect(parseExportOptions(JSON.stringify(stored))).toEqual(stored)
   })
@@ -63,6 +63,16 @@ describe('parseExportOptions', () => {
     expect(parsed.image.layout).toBe('vertical')
     expect(parsed.video.width).toBe(DEFAULT_EXPORT_OPTIONS.video.width)
     expect(parsed.video.reps).toBe(3)
+  })
+
+  it('rend le rythme par défaut sur une valeur absente, inconnue ou mal typée', () => {
+    // Comme les autres réglages de la feuille vidéo : une liste fermée (`oneOf`), pas
+    // un intervalle. « turbo » et un nombre sont deux façons différentes d en sortir.
+    const fallback = DEFAULT_EXPORT_OPTIONS.video.pace
+
+    expect(parseExportOptions('{"video":{}}').video.pace).toBe(fallback)
+    expect(parseExportOptions('{"video":{"pace":"turbo"}}').video.pace).toBe(fallback)
+    expect(parseExportOptions('{"video":{"pace":42}}').video.pace).toBe(fallback)
   })
 
   it('relit une taille de bandeau valide', () => {
@@ -92,7 +102,7 @@ describe('loadExportOptions / saveExportOptions', () => {
     stubStorage()
     const options = {
       image: { stamp: 'none', layout: 'horizontal', stampScale: 1.3 },
-      video: { transition: 'cut', width: 'full', reps: 1 },
+      video: { transition: 'cut', width: 'full', reps: 1, pace: 'fast' },
     } as const
 
     saveExportOptions(options)

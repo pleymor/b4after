@@ -10,6 +10,7 @@ import {
   STAMP_SCALE_MAX,
   STAMP_SCALE_MIN,
   type Layout,
+  type Pace,
   type StampMode,
   type Transition,
   type VideoLength,
@@ -55,6 +56,12 @@ const LENGTH_LABELS: readonly { value: VideoLength; label: string }[] = [
   { value: 1, label: 'Court' },
   { value: 3, label: 'Moyen' },
   { value: 5, label: 'Long' },
+]
+
+const PACE_LABELS: readonly { value: Pace; label: string }[] = [
+  { value: 'slow', label: 'Lent' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'fast', label: 'Rapide' },
 ]
 
 /**
@@ -475,6 +482,22 @@ export function CompareScreen() {
             value={options.video.reps}
             options={LENGTH_LABELS}
             onChange={(reps) => updateOptions({ video: { reps } })}
+          />
+        )}
+        {/* Comme la durée ci-dessus : le rythme n a aucun effet sur le repli GIF, qui
+            garde son propre modèle en paliers (voir video.ts et gif.ts). Et comme le
+            curseur de taille du bandeau sans bandeau : une coupe franche n a pas de
+            fondu à accélérer ou ralentir (voir le commentaire sur `fadeMs` dans
+            video.ts), le réglage reste donc désactivé plutôt que de mimer un effet
+            qu il n a pas. */}
+        {videoSupported && (
+          <OptionRow
+            testId="video-pace"
+            label="Rythme"
+            value={options.video.pace}
+            options={PACE_LABELS}
+            onChange={(pace) => updateOptions({ video: { pace } })}
+            disabled={options.video.transition === 'cut'}
           />
         )}
         {/* data-testid historique : il datait de l export GIF que celui-ci remplace en

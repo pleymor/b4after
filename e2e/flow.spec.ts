@@ -650,6 +650,26 @@ test('le curseur de taille du bandeau est désactivé sans bandeau', async ({ pa
   await expect(page.getByTestId('stamp-scale')).toBeDisabled()
 })
 
+test('la ligne « Rythme » est désactivée en coupe franche, faute de fondu à accélérer', async ({
+  page,
+}) => {
+  const { viewpointId, before, after } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare?before=${before}&after=${after}`)
+
+  await page.getByTestId('open-video-options').click()
+  const paceRadio = page.getByTestId('video-pace').getByRole('radio', { name: 'Lent' })
+  await expect(paceRadio).toBeEnabled()
+
+  // Une coupe franche n a pas d état intermédiaire : aucun fondu à accélérer ou
+  // ralentir (voir le commentaire sur `fadeMs` dans video.ts).
+  await page.getByTestId('transition-mode').getByRole('radio', { name: 'Coupe' }).click()
+  await expect(paceRadio).toBeDisabled()
+
+  // Et réactivée dès qu une transition redonne un sens au réglage.
+  await page.getByTestId('transition-mode').getByRole('radio', { name: 'Fondu' }).click()
+  await expect(paceRadio).toBeEnabled()
+})
+
 test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
   // Écran de téléphone : c est là que le problème se posait, l image y prenant
   // presque toute la hauteur utile.

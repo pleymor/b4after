@@ -1,12 +1,26 @@
-import type { Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
+import type { Pace, Transition, VideoLength, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, targetWidth, transitionSteps } from './crossfade'
-import { GIF_HOLD_MS, GIF_MAX_WIDTH, GIF_STEP_MS } from './gif'
+import { drawTransition, scaleInput, targetWidth, type ScaledInput } from './crossfade'
+import { GIF_MAX_WIDTH } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
 // Même défaut que le GIF (voir gif.ts), pas un plafond : le vrai plafond commun aux
 // deux exports est EXPORT_MAX_EDGE, appliqué dans targetWidth.
 export const VIDEO_MAX_WIDTH = GIF_MAX_WIDTH
+
+// Palier tenu entre deux fondus, le même quel que soit le rythme choisi : seul le
+// fondu accélère ou ralentit, le temps de voir chaque photo avant que ça reparte reste
+// constant (voir la spec de fluidité vidéo).
+export const VIDEO_HOLD_MS = 700
+
+// Durée du fondu selon le rythme choisi. Propre à la vidéo : le GIF garde son propre
+// modèle en paliers (voir GIF_STEPS et transitionSteps dans gif.ts et crossfade.ts),
+// contrainte réelle de ce format que H.264 n a pas.
+const FADE_DURATION_MS: Record<Pace, number> = {
+  slow: 1800,
+  normal: 1200,
+  fast: 700,
+}
 
 const VIDEO_MIME_CANDIDATES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
 
@@ -40,12 +54,78 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
+ * Anime un fondu de `mixStart` à `mixEnd` sur `durationMs`, une frame par
+ * `requestAnimationFrame` calculée depuis le temps réellement écoulé plutôt qu un
+ * nombre fixe de paliers : c est ce qui rend le mouvement fluide au lieu de saccadé
+ * (voir la spec de fluidité vidéo — `drawTransition` acceptait déjà un `mix` continu,
+ * seul l appelant discrétisait).
+ *
+ * La toute dernière frame dessine systématiquement `mixEnd` exactement, jamais une
+ * approximation : le temps écoulé réel d un `requestAnimationFrame` ne tombe presque
+ * jamais pile sur `durationMs`, et l état final doit malgré tout être montré.
+ */
+function animateFade(
+  ctx: CanvasRenderingContext2D,
+  from: ScaledInput,
+  to: ScaledInput,
+  size: Size,
+  mixStart: number,
+  mixEnd: number,
+  transition: Transition,
+  durationMs: number,
+  signal: AbortSignal | undefined,
+  onElapsed: (elapsedMs: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
+
+    const startedAt = performance.now()
+    let frameId = 0
+
+    const onAbort = () => {
+      cancelAnimationFrame(frameId)
+      signal?.removeEventListener('abort', onAbort)
+      reject(abortError())
+    }
+    signal?.addEventListener('abort', onAbort)
+
+    const tick = () => {
+      const elapsed = performance.now() - startedAt
+      if (elapsed >= durationMs) {
+        drawTransition(ctx, from, to, size, mixEnd, transition)
+        signal?.removeEventListener('abort', onAbort)
+        onElapsed(durationMs)
+        resolve()
+        return
+      }
+      drawTransition(
+        ctx,
+        from,
+        to,
+        size,
+        mixStart + (mixEnd - mixStart) * (elapsed / durationMs),
+        transition,
+      )
+      onElapsed(elapsed)
+      frameId = requestAnimationFrame(tick)
+    }
+
+    frameId = requestAnimationFrame(tick)
+  })
+}
+
+/**
  * Transition (fondu, coupe ou balayage) de l avant vers l après, en va-et-vient
  * (avant → après → avant → …), dessinée en temps réel sur un canevas détaché, capturée
- * et encodée par `MediaRecorder`. Même rythme que `renderCrossfadeGif` (paliers de
- * 500 ms, pas de transition de 80 ms) pour que les deux exports se ressemblent, mais
- * rejouée le nombre de fois spécifié par `reps` pour qu une seule lecture se lise déjà
- * comme une animation plutôt qu un clignement.
+ * et encodée par `MediaRecorder`. Rejouée le nombre de fois spécifié par `reps` pour
+ * qu une seule lecture se lise déjà comme une animation plutôt qu un clignement.
+ *
+ * Le fondu suit le temps écoulé (voir `animateFade`) et non un nombre fixe de paliers ;
+ * `pace` choisit sa durée. Le palier, lui, dure toujours `VIDEO_HOLD_MS` quel que soit
+ * le rythme choisi.
  */
 export async function renderCrossfadeVideo(
   before: ComparisonInput,
@@ -55,6 +135,7 @@ export async function renderCrossfadeVideo(
     transition?: Transition
     width?: VideoWidth
     reps?: VideoLength
+    pace?: Pace
     onProgress?: (done: number, total: number) => void
     signal?: AbortSignal
   } = {},
@@ -72,10 +153,16 @@ export async function renderCrossfadeVideo(
   const from = scaleInput(before, widthFactor)
   const to = scaleInput(after, widthFactor)
   const transition = options.transition ?? 'crossfade'
-  const fadeSteps = transitionSteps(transition)
+  const pace = options.pace ?? 'normal'
 
-  // Trois allers-retours par défaut, soit environ 3,4 s : un seul aller ne dure que
-  // le temps d'une prise plus un fondu (~1,1 s) et se lit comme un instantané figé
+  // Coupe franche : aucun état intermédiaire à représenter, donc aucun fondu à étaler
+  // dans le temps. `pace` reste donc sans effet sur cette transition, volontairement :
+  // accélérer ou ralentir un fondu qui n existe pas n aurait pas de sens. Le palier,
+  // lui, reste à VIDEO_HOLD_MS pour les trois transitions.
+  const fadeMs = transition === 'cut' ? 0 : FADE_DURATION_MS[pace]
+
+  // Trois allers-retours par défaut, soit environ 5,7 s à rythme normal : un seul aller
+  // ne dure que le temps d'une prise plus un fondu et se lit comme un instantané figé
   // plutôt que comme une animation.
   const reps = options.reps ?? 3
 
@@ -90,11 +177,11 @@ export async function renderCrossfadeVideo(
   const ctx = maybeCtx
 
   // Un taux explicite plutôt que la capture « au repaint » par défaut : sans lui
-  // la cadence dépend du navigateur, ce qui marche aujourd hui parce que nos
-  // paliers de 80 à 500 ms laissent largement le temps d un repaint, mais rien ne
-  // le garantit — et c est aussi par là qu une image finale pourrait se perdre.
-  // À 30 im/s le flux échantillonne le canevas à cadence fixe ; les longues
-  // plages immobiles ne coûtent presque rien, H.264 les compresse en quasi-rien.
+  // la cadence dépend du navigateur. À 30 im/s le flux échantillonne le canevas à
+  // cadence fixe ; comme le canevas est désormais redessiné en continu pendant un
+  // fondu (voir animateFade), ces 30 images par seconde sont bien 30 images
+  // distinctes, plus les longues plages immobiles des paliers, que H.264 compresse en
+  // quasi-rien.
   const stream = canvas.captureStream(30)
   const recorder = new MediaRecorder(stream, { mimeType: mime })
   const chunks: BlobPart[] = []
@@ -102,11 +189,13 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  // Pour une coupe franche (`fadeSteps === 0`), la boucle ne dessine que le palier de
-  // *départ* de chaque aller-retour ; l état atteint après le dernier aller-retour n
-  // est donc jamais dessiné par la boucle elle-même (voir plus bas). D où le `+ 1` :
-  // sans lui la barre de progression n atteindrait jamais 100 %.
-  const total = fadeSteps === 0 ? reps + 1 : reps * (1 + fadeSteps)
+  // Un aller-retour vaut palier + fondu. Pour une coupe franche (`fadeMs === 0`), la
+  // boucle ne dessine que le palier de *départ* de chaque aller-retour ; l état atteint
+  // après le dernier aller-retour n est donc jamais dessiné par la boucle elle-même
+  // (voir plus bas). D où le palier supplémentaire : sans lui la barre de progression
+  // n atteindrait jamais 100 %. `crossfade` et `wipe` n en ont pas besoin : leur
+  // dernière frame de fondu dessine déjà l état final.
+  const totalMs = fadeMs === 0 ? reps * VIDEO_HOLD_MS + VIDEO_HOLD_MS : reps * (VIDEO_HOLD_MS + fadeMs)
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -138,44 +227,48 @@ export async function renderCrossfadeVideo(
 
     recorder.start()
     ;(async () => {
-      let done = 0
+      // Temps de vidéo déjà couvert par les allers-retours précédents : la progression
+      // rapporte ce temps écoulé à `totalMs`, pas un compte de paliers franchis, pour
+      // rester une mesure temporelle fidèle même quand un fondu dure des secondes.
+      let elapsed = 0
       let mix = 0
       for (let rep = 0; rep < reps; rep += 1) {
         const target = 1 - mix
 
         drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(GIF_HOLD_MS, options.signal)
-        done += 1
-        options.onProgress?.(done, total)
+        await wait(VIDEO_HOLD_MS, options.signal)
+        elapsed += VIDEO_HOLD_MS
+        options.onProgress?.(elapsed, totalMs)
 
-        for (let step = 1; step <= fadeSteps; step += 1) {
-          drawTransition(
+        if (fadeMs > 0) {
+          const base = elapsed
+          await animateFade(
             ctx,
             from,
             to,
             { width, height },
-            mix + (target - mix) * (step / fadeSteps),
+            mix,
+            target,
             transition,
+            fadeMs,
+            options.signal,
+            (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
           )
-          await wait(GIF_STEP_MS, options.signal)
-          done += 1
-          options.onProgress?.(done, total)
+          elapsed = base + fadeMs
         }
 
         mix = target
       }
 
-      // Coupe franche : `fadeSteps` vaut 0, donc la boucle ci-dessus n a dessiné que
-      // les paliers de *départ* de chaque aller-retour, jamais l état atteint après le
+      // Coupe franche : `fadeMs` vaut 0, donc la boucle ci-dessus n a dessiné que les
+      // paliers de *départ* de chaque aller-retour, jamais l état atteint après le
       // dernier. Sans ce palier, la vidéo s arrêterait sur le dernier avant affiché et
       // ne montrerait jamais l après, même si `mix` vaut bien `target` à ce point.
-      // `crossfade` et `wipe` n en ont pas besoin : leur dernière frame de transition
-      // dessine déjà `mix = target`.
-      if (fadeSteps === 0) {
+      if (fadeMs === 0) {
         drawTransition(ctx, from, to, { width, height }, mix, transition)
-        await wait(GIF_HOLD_MS, options.signal)
-        done += 1
-        options.onProgress?.(done, total)
+        await wait(VIDEO_HOLD_MS, options.signal)
+        elapsed += VIDEO_HOLD_MS
+        options.onProgress?.(elapsed, totalMs)
       }
 
       stopRecorder()
