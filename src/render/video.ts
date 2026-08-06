@@ -60,25 +60,6 @@ export function supportedVideoMime(): string | null {
   return VIDEO_MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? null
 }
 
-function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(abortError())
-      return
-    }
-    const onAbort = () => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      reject(abortError())
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    signal?.addEventListener('abort', onAbort)
-  })
-}
-
 /**
  * Anime un fondu de `mixStart` à `mixEnd` sur `durationMs`, une frame par
  * `requestAnimationFrame` calculée depuis le temps réellement écoulé plutôt qu un
@@ -135,6 +116,60 @@ function animateFade(
         mixStart + (mixEnd - mixStart) * (elapsed / durationMs),
         transition,
       )
+      onElapsed(elapsed)
+      frameId = requestAnimationFrame(tick)
+    }
+
+    frameId = requestAnimationFrame(tick)
+  })
+}
+
+/**
+ * Tient un contenu immobile affiché pendant `durationMs`, en le redessinant à chaque
+ * `requestAnimationFrame` plutôt que de simplement attendre `durationMs` par un
+ * minuteur — ce dernier paraît suffisant (le contenu ne change pas, alors pourquoi le
+ * redessiner ?) mais ne l est pas : `canvas.captureStream()` n émet une frame que
+ * lorsque le canevas change, jamais sur une simple horloge. Un minuteur laisserait
+ * donc le canevas parfaitement immobile pendant tout le palier, et le flux cesserait
+ * d émettre jusqu au prochain redessin réel. Pour un palier intermédiaire ça ne se
+ * voit pas, le fondu suivant vient combler l absence de frames. Mais le tout dernier
+ * palier n a pas de fondu après lui : sans redessin, la vidéo s arrête net sur la fin
+ * de la transition qui le précède, avant même d avoir montré le palier promis — le
+ * bug d origine. Redessiner à l identique à chaque frame marque le canevas comme
+ * modifié et fait circuler le flux tout du long, sans rien changer à l image montrée.
+ */
+function holdFrame(
+  draw: () => void,
+  durationMs: number,
+  signal: AbortSignal | undefined,
+  onElapsed: (elapsedMs: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
+
+    draw()
+    const startedAt = performance.now()
+    let frameId = 0
+
+    const onAbort = () => {
+      cancelAnimationFrame(frameId)
+      signal?.removeEventListener('abort', onAbort)
+      reject(abortError())
+    }
+    signal?.addEventListener('abort', onAbort)
+
+    const tick = () => {
+      const elapsed = performance.now() - startedAt
+      if (elapsed >= durationMs) {
+        signal?.removeEventListener('abort', onAbort)
+        onElapsed(durationMs)
+        resolve()
+        return
+      }
+      draw()
       onElapsed(elapsed)
       frameId = requestAnimationFrame(tick)
     }
@@ -266,9 +301,14 @@ export async function renderCrossfadeVideo(
       let current = await decodeScaled(scaled[0])
       try {
         // Palier sur la première photo : la seule qu on affiche sans avoir encore
-        // besoin de décoder la suivante.
-        drawSingle(ctx, current, { width, height })
-        await wait(holdMs, options.signal)
+        // besoin de décoder la suivante. `holdFrame`, pas un simple dessin suivi
+        // d une attente : voir sa documentation pour la raison.
+        await holdFrame(
+          () => drawSingle(ctx, current, { width, height }),
+          holdMs,
+          options.signal,
+          (holdElapsed) => options.onProgress?.(holdElapsed, totalMs),
+        )
         elapsed += holdMs
         options.onProgress?.(elapsed, totalMs)
 
@@ -290,19 +330,23 @@ export async function renderCrossfadeVideo(
                 (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
               )
               elapsed = base + fadeMs
-            } else {
-              // Coupe franche : aucun fondu à animer, on bascule directement sur l
-              // état final avant le palier qui le tient.
-              drawTransition(ctx, current, next, { width, height }, 1, transition)
             }
 
             // Le palier sur cette photo : c est lui qui garantit que la vidéo se
             // termine sur la dernière photo de la série, et non sur la dernière image
             // de la transition. Sans lui, un fondu s arrêterait net à `mix === 1` —
-            // une seule frame — et une coupe ne montrerait jamais la photo suivante
-            // du tout.
-            await wait(holdMs, options.signal)
-            elapsed += holdMs
+            // une seule frame — et une coupe ne montrerait jamais la photo suivante du
+            // tout. `drawSingle` couvre aussi la coupe franche : basculer directement
+            // sur l état final, sans fondu, est exactement ce que montre déjà
+            // `drawTransition` à `mix === 1` pour une coupe (voir sa documentation).
+            const holdBase = elapsed
+            await holdFrame(
+              () => drawSingle(ctx, next, { width, height }),
+              holdMs,
+              options.signal,
+              (holdElapsed) => options.onProgress?.(holdBase + holdElapsed, totalMs),
+            )
+            elapsed = holdBase + holdMs
             options.onProgress?.(elapsed, totalMs)
           } catch (error) {
             // `current` est fermé par le `finally` ci-dessous : sur cette branche

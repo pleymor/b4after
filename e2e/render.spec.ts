@@ -1602,6 +1602,51 @@ test("renderCrossfadeVideo dure plus longtemps au rythme lent qu'au rythme rapid
   expect(result.slow).toBeGreaterThan(result.fast)
 })
 
+test(
+  "renderCrossfadeVideo : la durée de contenu réellement produite rejoint celle qu'annonce " +
+    'videoDurationMs, palier final compris',
+  async ({ page }) => {
+    // Aucun test existant ne mesure la durée de contenu de la vidéo produite : les
+    // tests ci-dessus chronomètrent l appel (correct, la fonction attend bien le bon
+    // temps) ou lisent la dernière frame disponible (correcte elle aussi, mais la
+    // même que celle montrée par une vidéo dont le palier final a été purement et
+    // simplement coupé par `captureStream`, faute de redessin — voir `holdFrame`
+    // dans video.ts). C est cette mesure-ci, et elle seule, qui aurait détecté le
+    // bug : palier long (2000 ms, `HOLD_DURATION_MS.long`) et fondu rapide (700 ms,
+    // `FADE_DURATION_MS.fast`) sur trois photos rendent l écart — la durée d un
+    // palier entier manquant — assez large pour ne laisser aucune place au doute.
+    const result = await page.evaluate(async (helpers) => {
+      eval(helpers)
+      const { renderCrossfadeVideo, videoDurationMs } = await import('/src/render/video.ts')
+      const { IDENTITY } = await import('/src/align/transform.ts')
+
+      const frame = { width: 100, height: 150 }
+      const solid = async (color) => ({
+        blob: await window.__solidBlob(100, 150, color),
+        transform: IDENTITY,
+        takenAt: 0,
+        shot: frame,
+      })
+
+      const inputs = [await solid('#ff0000'), await solid('#00ff00'), await solid('#0000ff')]
+      const options = { transition: 'crossfade', width: 640, hold: 'long', pace: 'fast' }
+      const announcedMs = videoDurationMs(inputs.length, options)
+
+      const blob = await renderCrossfadeVideo(inputs, frame, options)
+      const contentMs = (await window.__durationOf(blob)) * 1000
+
+      return { announcedMs, contentMs }
+    }, HELPERS + DURATION_HELPER)
+
+    // Tolérance large (1 s) : elle ne vise pas à mesurer l encodage au plus juste,
+    // seulement à distinguer sans ambiguïté un palier final bien capturé (écart de
+    // quelques centaines de ms, le bruit habituel de l encodage et de la relecture)
+    // d une vidéo qui s arrête à la fin de la dernière transition (écart de l ordre
+    // du palier entier manquant, ici 2000 ms).
+    expect(Math.abs(result.contentMs - result.announcedMs)).toBeLessThan(1000)
+  },
+)
+
 test('importPhoto ré-encode une photo importée en JPEG, aux dimensions de la source, avec une vignette', async ({
   page,
 }) => {
