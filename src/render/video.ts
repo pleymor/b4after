@@ -1,6 +1,13 @@
 import type { HoldDuration, Pace, Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
-import { drawTransition, scaleInput, targetWidth, type ScaledInput } from './crossfade'
+import {
+  decodeScaled,
+  drawSingle,
+  drawTransition,
+  scaleInput,
+  targetWidth,
+  type DecodedInput,
+} from './crossfade'
 import { GIF_MAX_WIDTH } from './gif'
 import type { ComparisonInput } from './sideBySide'
 
@@ -8,9 +15,9 @@ import type { ComparisonInput } from './sideBySide'
 // deux exports est EXPORT_MAX_EDGE, appliqué dans targetWidth.
 export const VIDEO_MAX_WIDTH = GIF_MAX_WIDTH
 
-// Durée du palier tenu avant et après la transition, selon le réglage choisi. Le même
-// réglage pilote les deux paliers : pas de contrôle indépendant pour l avant et
-// l après (voir la spec du passage unique).
+// Durée du palier tenu sur chaque photo, selon le réglage choisi. Le même réglage
+// pilote tous les paliers de la série : pas de contrôle indépendant photo par photo
+// (voir la spec du passage unique).
 export const HOLD_DURATION_MS: Record<HoldDuration, number> = {
   short: 700,
   medium: 1200,
@@ -70,8 +77,8 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
  */
 function animateFade(
   ctx: CanvasRenderingContext2D,
-  from: ScaledInput,
-  to: ScaledInput,
+  from: DecodedInput,
+  to: DecodedInput,
   size: Size,
   mixStart: number,
   mixEnd: number,
@@ -122,19 +129,23 @@ function animateFade(
 }
 
 /**
- * Transition (fondu, coupe ou balayage) de l avant vers l après, en un seul passage
- * (palier sur l avant → transition → palier sur l après), dessinée en temps réel sur
- * un canevas détaché, capturée et encodée par `MediaRecorder`. Un seul passage suffit
- * au propos d une comparaison avant/après ; un aller-retour supplémentaire n ajoute
- * que de la longueur (voir la spec du passage unique).
+ * Transition (fondu, coupe ou balayage) qui parcourt toute la série en un seul passage
+ * (palier sur la photo 1 → transition → palier sur la photo 2 → … → palier sur la
+ * dernière), dessinée en temps réel sur un canevas détaché, capturée et encodée par
+ * `MediaRecorder`. Un seul passage suffit au propos d une comparaison avant/après ; un
+ * aller-retour supplémentaire n ajoute que de la longueur (voir la spec du passage
+ * unique) — généralisé ici à N photos plutôt qu à une seule paire (voir la spec de
+ * comparaison de série).
+ *
+ * Décode une photo à la fois, au plus deux bitmaps vivants simultanément — celle qu on
+ * quitte et celle qu on rejoint — jamais toute la série (voir la spec, § Mémoire).
  *
  * Le fondu suit le temps écoulé (voir `animateFade`) et non un nombre fixe de
  * paliers ; `pace` choisit sa durée. Le palier, lui, dure `HOLD_DURATION_MS[hold]`,
- * le même avant et après quel que soit le rythme choisi.
+ * le même sur chaque photo quel que soit le rythme choisi.
  */
 export async function renderCrossfadeVideo(
-  before: ComparisonInput,
-  after: ComparisonInput,
+  inputs: ComparisonInput[],
   frame: Size,
   options: {
     transition?: Transition
@@ -155,8 +166,8 @@ export async function renderCrossfadeVideo(
   const width = Math.round(frame.width * widthFactor)
   const height = Math.round(frame.height * widthFactor)
 
-  const from = scaleInput(before, widthFactor)
-  const to = scaleInput(after, widthFactor)
+  const scaled = inputs.map((input) => scaleInput(input, widthFactor))
+  const count = inputs.length
   const transition = options.transition ?? 'crossfade'
   const pace = options.pace ?? 'normal'
   const holdMs = HOLD_DURATION_MS[options.hold ?? 'medium']
@@ -190,9 +201,10 @@ export async function renderCrossfadeVideo(
     if (event.data.size > 0) chunks.push(event.data)
   }
 
-  // Un seul passage : palier sur l avant, fondu (éventuellement nul en coupe franche),
-  // palier sur l après.
-  const totalMs = 2 * holdMs + fadeMs
+  // Un seul passage sur toute la série : N paliers, N-1 fondus (éventuellement nuls
+  // en coupe franche) — la généralisation directe du passage unique à deux photos.
+  const gaps = count - 1
+  const totalMs = count * holdMs + gaps * fadeMs
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false
@@ -229,39 +241,62 @@ export async function renderCrossfadeVideo(
       // franchis, pour rester une mesure temporelle fidèle même quand un fondu dure
       // des secondes.
       let elapsed = 0
+      let current = await decodeScaled(scaled[0])
+      try {
+        // Palier sur la première photo : la seule qu on affiche sans avoir encore
+        // besoin de décoder la suivante.
+        drawSingle(ctx, current, { width, height })
+        await wait(holdMs, options.signal)
+        elapsed += holdMs
+        options.onProgress?.(elapsed, totalMs)
 
-      drawTransition(ctx, from, to, { width, height }, 0, transition)
-      await wait(holdMs, options.signal)
-      elapsed += holdMs
-      options.onProgress?.(elapsed, totalMs)
+        for (let index = 1; index < count; index += 1) {
+          const next = await decodeScaled(scaled[index])
+          try {
+            if (fadeMs > 0) {
+              const base = elapsed
+              await animateFade(
+                ctx,
+                current,
+                next,
+                { width, height },
+                0,
+                1,
+                transition,
+                fadeMs,
+                options.signal,
+                (fadeElapsed) => options.onProgress?.(base + fadeElapsed, totalMs),
+              )
+              elapsed = base + fadeMs
+            } else {
+              // Coupe franche : aucun fondu à animer, on bascule directement sur l
+              // état final avant le palier qui le tient.
+              drawTransition(ctx, current, next, { width, height }, 1, transition)
+            }
 
-      if (fadeMs > 0) {
-        await animateFade(
-          ctx,
-          from,
-          to,
-          { width, height },
-          0,
-          1,
-          transition,
-          fadeMs,
-          options.signal,
-          (fadeElapsed) => options.onProgress?.(elapsed + fadeElapsed, totalMs),
-        )
-        elapsed += fadeMs
-      } else {
-        // Coupe franche : aucun fondu à animer, on bascule directement sur l état final
-        // avant le palier qui le tient.
-        drawTransition(ctx, from, to, { width, height }, 1, transition)
+            // Le palier sur cette photo : c est lui qui garantit que la vidéo se
+            // termine sur la dernière photo de la série, et non sur la dernière image
+            // de la transition. Sans lui, un fondu s arrêterait net à `mix === 1` —
+            // une seule frame — et une coupe ne montrerait jamais la photo suivante
+            // du tout.
+            await wait(holdMs, options.signal)
+            elapsed += holdMs
+            options.onProgress?.(elapsed, totalMs)
+          } catch (error) {
+            // `current` est fermé par le `finally` ci-dessous : sur cette branche
+            // d erreur (annulation en cours de pas), c est `next` qu il faut fermer
+            // nous-mêmes, faute de quoi il ne serait jamais réassigné à `current` et
+            // resterait ouvert.
+            next.bitmap.close()
+            throw error
+          } finally {
+            current.bitmap.close()
+          }
+          current = next
+        }
+      } finally {
+        current.bitmap.close()
       }
-
-      // Le palier final : c est lui qui garantit que la vidéo se termine sur l après,
-      // et non sur la dernière image de la transition. Sans lui, un fondu s arrêterait
-      // net à `mix === 1` — une seule frame — et une coupe ne montrerait jamais l après
-      // du tout.
-      await wait(holdMs, options.signal)
-      elapsed += holdMs
-      options.onProgress?.(elapsed, totalMs)
 
       stopRecorder()
     })().catch(fail)

@@ -27,6 +27,14 @@ describe('parseExportOptions', () => {
     expect(parseExportOptions(null)).toEqual(DEFAULT_EXPORT_OPTIONS)
   })
 
+  it('fixe la largeur d image par défaut à 2048 px', () => {
+    // Littéral, pas dérivé : c est la valeur que `renderSideBySide` appliquait déjà
+    // en dur avant l existence du réglage (`EXPORT_MAX_EDGE`). La changer ici sans
+    // le vouloir changerait le rendu de tous ceux qui n ont jamais ouvert la feuille
+    // de réglages (voir la spec de comparaison de série).
+    expect(DEFAULT_EXPORT_OPTIONS.image.width).toBe(2048)
+  })
+
   it('rend les défauts sur un JSON illisible', () => {
     expect(parseExportOptions('{pas du json')).toEqual(DEFAULT_EXPORT_OPTIONS)
   })
@@ -38,7 +46,7 @@ describe('parseExportOptions', () => {
 
   it('relit une valeur complète', () => {
     const stored = {
-      image: { stamp: 'datetime', layout: 'vertical', stampScale: 1.5 },
+      image: { stamp: 'datetime', layout: 'vertical', stampScale: 1.5, width: 1024 },
       video: { transition: 'wipe', width: 1080, hold: 'long', pace: 'slow' },
     }
     expect(parseExportOptions(JSON.stringify(stored))).toEqual(stored)
@@ -117,13 +125,28 @@ describe('parseExportOptions', () => {
     // être exprimé en JSON, ce qu il ne peut pas.
     expect(parseExportOptions('{"image":{"stampScale":1e400}}').image.stampScale).toBe(fallback)
   })
+
+  it('relit une largeur d image valide, y compris `full`', () => {
+    expect(parseExportOptions('{"image":{"width":1024}}').image.width).toBe(1024)
+    expect(parseExportOptions('{"image":{"width":"full"}}').image.width).toBe('full')
+  })
+
+  it('rend la largeur d image par défaut sur une valeur absente ou inconnue', () => {
+    // Comme les autres réglages en liste fermée (`oneOf`) : ni 1080 (une largeur
+    // vidéo, pas image) ni une chaîne quelconque ne font partie de `IMAGE_WIDTHS`.
+    const fallback = DEFAULT_EXPORT_OPTIONS.image.width
+
+    expect(parseExportOptions('{"image":{}}').image.width).toBe(fallback)
+    expect(parseExportOptions('{"image":{"width":1080}}').image.width).toBe(fallback)
+    expect(parseExportOptions('{"image":{"width":"maximale"}}').image.width).toBe(fallback)
+  })
 })
 
 describe('loadExportOptions / saveExportOptions', () => {
   it('fait un aller-retour fidèle', () => {
     stubStorage()
     const options = {
-      image: { stamp: 'none', layout: 'horizontal', stampScale: 1.3 },
+      image: { stamp: 'none', layout: 'horizontal', stampScale: 1.3, width: 'full' },
       video: { transition: 'cut', width: 'full', hold: 'short', pace: 'fast' },
     } as const
 

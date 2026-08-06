@@ -1,24 +1,26 @@
 import type { Transition, VideoWidth } from '@/lib/exportOptions'
 import type { Size, Transform } from '@/types'
-import { drawShot, type Drawable } from './drawShot'
+import { drawShot } from './drawShot'
 import { GIF_STEPS } from './gif'
 import { EXPORT_MAX_EDGE } from './sideBySide'
 import type { ComparisonInput } from './sideBySide'
 
-/** Une entrée de comparaison ramenée à l échelle d export, sans sa date. */
+/** Une entrée de comparaison ramenée à l échelle d export, sans sa date ni son décodage. */
 export type ScaledInput = {
-  source: Drawable
+  blob: Blob
   transform: Transform
   shot: Size
 }
 
 /**
  * Ramène une entrée à l échelle d export. La transformation stockée est en pixels du
- * cadre canonique : sa translation suit le facteur, son `scale` est déjà relatif.
+ * cadre canonique : sa translation suit le facteur, son `scale` est déjà relatif. Le
+ * blob n est pas décodé ici : c est `decodeScaled` qui le fait, une photo à la fois,
+ * pour ne jamais garder tout un défilé de bitmaps pleine résolution en mémoire.
  */
 export function scaleInput(input: ComparisonInput, factor: number): ScaledInput {
   return {
-    source: input.source,
+    blob: input.blob,
     transform: {
       ...input.transform,
       tx: input.transform.tx * factor,
@@ -29,6 +31,27 @@ export function scaleInput(input: ComparisonInput, factor: number): ScaledInput 
       height: input.shot.height * factor,
     },
   }
+}
+
+/** Une entrée décodée, prête à dessiner. À fermer (`bitmap.close()`) après usage. */
+export type DecodedInput = {
+  bitmap: ImageBitmap
+  transform: Transform
+  shot: Size
+}
+
+/**
+ * Décode le bitmap d une entrée mise à l échelle. Le décodage est demandé à la taille
+ * réellement dessinée (`shot`, déjà réduite par `scaleInput`) via `resizeWidth` :
+ * jamais plus de pixels décodés que ce que le rendu affiche, quelle que soit la
+ * résolution native de la photo (voir la spec de comparaison de série, § Mémoire).
+ */
+export async function decodeScaled(input: ScaledInput): Promise<DecodedInput> {
+  const bitmap = await createImageBitmap(input.blob, {
+    resizeWidth: Math.max(1, Math.round(input.shot.width)),
+    resizeQuality: 'medium',
+  })
+  return { bitmap, transform: input.transform, shot: input.shot }
 }
 
 /**
@@ -50,6 +73,16 @@ export function transitionSteps(transition: Transition): number {
   return transition === 'cut' ? 0 : GIF_STEPS - 2
 }
 
+/** Dessine une seule entrée décodée, sans transition : le palier pur d une photo. */
+export function drawSingle(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  input: DecodedInput,
+  size: Size,
+): void {
+  ctx.clearRect(0, 0, size.width, size.height)
+  drawShot(ctx, input.bitmap, input.transform, size, input.shot)
+}
+
 /**
  * Dessine l état intermédiaire `mix` (0 = avant, 1 = après) selon la transition
  * demandée. Seul endroit du code où une transition est définie : `gif.ts` et
@@ -57,8 +90,8 @@ export function transitionSteps(transition: Transition): number {
  */
 export function drawTransition(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  from: ScaledInput,
-  to: ScaledInput,
+  from: DecodedInput,
+  to: DecodedInput,
   size: Size,
   mix: number,
   transition: Transition,
@@ -69,11 +102,11 @@ export function drawTransition(
   if (transition === 'cut') {
     // Aucun état intermédiaire à représenter : on bascule à mi-course.
     const shown = mix < 0.5 ? from : to
-    drawShot(ctx, shown.source, shown.transform, size, shown.shot)
+    drawShot(ctx, shown.bitmap, shown.transform, size, shown.shot)
     return
   }
 
-  drawShot(ctx, from.source, from.transform, size, from.shot)
+  drawShot(ctx, from.bitmap, from.transform, size, from.shot)
   if (mix <= 0) return
 
   if (transition === 'wipe') {
@@ -83,12 +116,12 @@ export function drawTransition(
     ctx.beginPath()
     ctx.rect(0, 0, size.width * mix, size.height)
     ctx.clip()
-    drawShot(ctx, to.source, to.transform, size, to.shot)
+    drawShot(ctx, to.bitmap, to.transform, size, to.shot)
     ctx.restore()
     return
   }
 
   ctx.globalAlpha = mix
-  drawShot(ctx, to.source, to.transform, size, to.shot)
+  drawShot(ctx, to.bitmap, to.transform, size, to.shot)
   ctx.globalAlpha = 1
 }

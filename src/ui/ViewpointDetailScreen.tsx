@@ -8,21 +8,7 @@ import { formatDate } from '@/lib/format'
 import type { Shot, Viewpoint } from '@/types'
 import { Screen } from './components/Screen'
 
-function ShotRow({
-  shot,
-  isBefore,
-  isAfter,
-  onSelectBefore,
-  onSelectAfter,
-  onDelete,
-}: {
-  shot: Shot
-  isBefore: boolean
-  isAfter: boolean
-  onSelectBefore: () => void
-  onSelectAfter: () => void
-  onDelete: () => void
-}) {
+function ShotRow({ shot, onDelete }: { shot: Shot; onDelete: () => void }) {
   const thumbUrl = useObjectUrl(shot.thumbBlob)
 
   return (
@@ -31,31 +17,6 @@ function ShotRow({
         {thumbUrl && <img src={thumbUrl} alt="" className="size-full object-cover" />}
       </div>
       <p className="flex-1 text-sm">{formatDate(shot.takenAt)}</p>
-      <label className="flex flex-col items-center text-xs text-slate-300">
-        Avant
-        {/* Le libellé visible « Avant » est identique sur chaque ligne : sans nom
-            accessible qualifié, un lecteur d écran l annonce autant de fois que la
-            série compte de photos, sans dire laquelle. */}
-        <input
-          type="radio"
-          name="before"
-          data-testid="select-before"
-          checked={isBefore}
-          onChange={onSelectBefore}
-          aria-label={`Choisir la photo du ${formatDate(shot.takenAt)} comme avant`}
-        />
-      </label>
-      <label className="flex flex-col items-center text-xs text-slate-300">
-        Après
-        <input
-          type="radio"
-          name="after"
-          data-testid="select-after"
-          checked={isAfter}
-          onChange={onSelectAfter}
-          aria-label={`Choisir la photo du ${formatDate(shot.takenAt)} comme après`}
-        />
-      </label>
       <button
         type="button"
         data-testid="delete-shot"
@@ -90,28 +51,6 @@ export function ViewpointDetailScreen() {
         setViewpointError(true)
       })
   }, [id, navigate])
-
-  const [before, setBefore] = useState<string | null>(null)
-  const [after, setAfter] = useState<string | null>(null)
-
-  /**
-   * La comparaison attendue par défaut : la plus ancienne contre la plus récente.
-   *
-   * On ne réinitialise que si la sélection courante a disparu. Repartir des valeurs
-   * par défaut à chaque rechargement effacerait le choix de l utilisateur dès qu il
-   * supprime une photo sans rapport avec la comparaison en cours.
-   */
-  useEffect(() => {
-    const present = new Set(shots.map((shot) => shot.id))
-    setBefore((current) => (current && present.has(current) ? current : (shots[0]?.id ?? null)))
-    setAfter((current) =>
-      current && present.has(current)
-        ? current
-        : shots.length >= 2
-          ? shots[shots.length - 1].id
-          : null,
-    )
-  }, [shots])
 
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState('')
@@ -181,15 +120,7 @@ export function ViewpointDetailScreen() {
 
       <ul>
         {shots.map((shot) => (
-          <ShotRow
-            key={shot.id}
-            shot={shot}
-            isBefore={before === shot.id}
-            isAfter={after === shot.id}
-            onSelectBefore={() => setBefore(shot.id)}
-            onSelectAfter={() => setAfter(shot.id)}
-            onDelete={() => onDeleteShot(shot.id)}
-          />
+          <ShotRow key={shot.id} shot={shot} onDelete={() => onDeleteShot(shot.id)} />
         ))}
       </ul>
 
@@ -204,8 +135,8 @@ export function ViewpointDetailScreen() {
         <button
           type="button"
           data-testid="compare"
-          disabled={!before || !after || before === after}
-          onClick={() => navigate(`/v/${id}/compare?before=${before}&after=${after}`)}
+          disabled={shots.length < 2}
+          onClick={() => navigate(`/v/${id}/compare`)}
           className="w-full rounded-xl border border-slate-600 py-4 disabled:opacity-40"
         >
           Comparer

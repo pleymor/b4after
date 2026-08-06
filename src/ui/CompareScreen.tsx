@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router'
-import { getShot } from '@/db/shots'
+import { Link, useParams } from 'react-router'
 import { getViewpoint } from '@/db/viewpoints'
-import { useBitmap } from '@/hooks/useBitmap'
 import { useExportOptions } from '@/hooks/useExportOptions'
 import { useObjectUrl } from '@/hooks/useObjectUrl'
-import { formatDate } from '@/lib/format'
+import { useShots } from '@/hooks/useShots'
 import {
   STAMP_SCALE_MAX,
   STAMP_SCALE_MIN,
   type HoldDuration,
+  type ImageWidth,
   type Layout,
   type Pace,
   type StampMode,
@@ -22,10 +21,9 @@ import { renderCrossfadeVideo, supportedVideoMime } from '@/render/video'
 import { shareOrDownload } from '@/share/shareOrDownload'
 import type { Shot, Size, Viewpoint } from '@/types'
 import { OptionRow } from './components/OptionRow'
-import { RevealSlider } from './components/RevealSlider'
 import { Screen } from './components/Screen'
+import { SeriesScrubber } from './components/SeriesScrubber'
 import { Sheet } from './components/Sheet'
-import { ShotCanvas } from './components/ShotCanvas'
 import { PlayIcon, SideBySideIcon } from './components/icons'
 
 const STAMP_LABELS: readonly { value: StampMode; label: string }[] = [
@@ -46,7 +44,7 @@ const TRANSITION_LABELS: readonly { value: Transition; label: string }[] = [
   { value: 'wipe', label: 'Balayage' },
 ]
 
-const WIDTH_LABELS: readonly { value: VideoWidth; label: string }[] = [
+const VIDEO_WIDTH_LABELS: readonly { value: VideoWidth; label: string }[] = [
   { value: 640, label: 'Standard' },
   { value: 1080, label: 'Haute' },
   { value: 'full', label: 'Maximale' },
@@ -58,6 +56,14 @@ const HOLD_LABELS: readonly { value: HoldDuration; label: string }[] = [
   { value: 'long', label: 'Longue' },
 ]
 
+// Pendant exact de VIDEO_WIDTH_LABELS pour l image : mêmes libellés, valeurs propres
+// à `ImageWidth` (voir la spec de comparaison de série).
+const IMAGE_WIDTH_LABELS: readonly { value: ImageWidth; label: string }[] = [
+  { value: 1024, label: 'Standard' },
+  { value: 2048, label: 'Haute' },
+  { value: 'full', label: 'Maximale' },
+]
+
 const PACE_LABELS: readonly { value: Pace; label: string }[] = [
   { value: 'slow', label: 'Lent' },
   { value: 'normal', label: 'Normal' },
@@ -65,9 +71,9 @@ const PACE_LABELS: readonly { value: Pace; label: string }[] = [
 ]
 
 /**
- * Largeur maximale de l aperçu, bien sous `EXPORT_MAX_EDGE` : le bandeau et la police
- * étant proportionnels à la largeur de cellule, un rendu à cette taille est
- * exactement l export en plus petit — jamais une approximation à part.
+ * Largeur maximale de l aperçu, bien sous les plafonds de l option « Largeur » : le
+ * bandeau et la police étant proportionnels à la largeur de cellule, un rendu à cette
+ * taille est exactement l export en plus petit — jamais une approximation à part.
  */
 const PREVIEW_MAX_EDGE = 480
 
@@ -93,12 +99,20 @@ function fileStamp(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10)
 }
 
+function toComparisonInput(shot: Shot): ComparisonInput {
+  return {
+    blob: shot.blob,
+    transform: shot.transform,
+    takenAt: shot.takenAt,
+    shot: { width: shot.width, height: shot.height },
+  }
+}
+
 export function CompareScreen() {
   const { id } = useParams<{ id: string }>()
-  const [params] = useSearchParams()
 
   const [viewpoint, setViewpoint] = useState<Viewpoint | null>(null)
-  const [pair, setPair] = useState<{ before: Shot; after: Shot } | null>(null)
+  const { shots, loading: shotsLoading, error: shotsError } = useShots(id)
   const [status, setStatus] = useState<string | null>('Chargement…')
   // Distingue l échec (alerte) du succès et de l information neutre : les trois
   // partagent la même zone de statut, sans quoi rien ne les distinguerait à l œil.
@@ -115,45 +129,48 @@ export function CompareScreen() {
 
   useEffect(() => {
     if (!id) return
-    const beforeId = params.get('before')
-    const afterId = params.get('after')
-
-    Promise.all([
-      getViewpoint(id),
-      beforeId ? getShot(beforeId) : undefined,
-      afterId ? getShot(afterId) : undefined,
-    ]).then(([foundViewpoint, before, after]) => {
-      if (!foundViewpoint || !before || !after) {
-        setStatus('Comparaison introuvable. Retournez à la série pour en choisir une autre.')
-        return
-      }
-      setViewpoint(foundViewpoint)
-      setPair({ before, after })
-      setStatus(null)
-    }).catch(() => setStatus('Impossible de lire cette comparaison.'))
-  }, [id, params])
-
-  const { bitmap: beforeBitmap, error: beforeBitmapError } = useBitmap(pair?.before.blob)
-  const { bitmap: afterBitmap, error: afterBitmapError } = useBitmap(pair?.after.blob)
-  const bitmapError = beforeBitmapError || afterBitmapError
-
-  const frame: Size | null = viewpoint
-    ? { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
-    : null
-
-  // Les boutons d export restent inertes tant que les deux photos ne sont pas
-  // décodées : les activer plus tôt donnerait une tape sans effet ni message.
-  const ready = Boolean(pair && frame && beforeBitmap && afterBitmap)
-
-  // Choisi une fois pour l écran : sert à masquer le réglage de durée, qui ne
-  // s applique pas au repli GIF.
-  const videoSupported = supportedVideoMime() !== null
+    getViewpoint(id)
+      .then((found) => {
+        if (!found) {
+          setStatus('Comparaison introuvable. Retournez à la série pour en choisir une autre.')
+          return
+        }
+        setViewpoint(found)
+      })
+      .catch(() => setStatus('Impossible de lire cette comparaison.'))
+  }, [id])
 
   /** Pose le statut affiché dans le pied de page, avec sa couleur (alerte ou neutre). */
   function setFooterStatus(message: string | null, error = false) {
     setStatus(message)
     setStatusError(error)
   }
+
+  // La comparaison porte sur toute la série : moins de deux photos, et il n y a rien à
+  // comparer — le même garde-fou que le bouton « Comparer » de l écran de détail, ici
+  // recontrôlé au cas où l URL a été atteinte directement.
+  useEffect(() => {
+    if (shotsLoading) return
+    if (shotsError) {
+      setFooterStatus('Impossible de lire cette comparaison.', true)
+      return
+    }
+    if (shots.length < 2) {
+      setFooterStatus('Comparaison introuvable. Retournez à la série pour en choisir une autre.')
+      return
+    }
+    setFooterStatus(null)
+  }, [shotsLoading, shotsError, shots.length])
+
+  const frame: Size | null = viewpoint
+    ? { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
+    : null
+
+  const ready = Boolean(viewpoint && frame && !shotsLoading && !shotsError && shots.length >= 2)
+
+  // Choisi une fois pour l écran : sert à masquer le réglage de durée, qui ne
+  // s applique pas au repli GIF.
+  const videoSupported = supportedVideoMime() !== null
 
   // Fermer la feuille pendant un encodage ferait disparaître d un coup la progression
   // et le bouton d annulation, sans aucun moyen de les retrouver : seul le bouton
@@ -165,24 +182,6 @@ export function CompareScreen() {
     setSheet(null)
   }
 
-  function inputsFor(): { before: ComparisonInput; after: ComparisonInput } | null {
-    if (!pair || !beforeBitmap || !afterBitmap) return null
-    return {
-      before: {
-        source: beforeBitmap,
-        transform: pair.before.transform,
-        takenAt: pair.before.takenAt,
-        shot: { width: pair.before.width, height: pair.before.height },
-      },
-      after: {
-        source: afterBitmap,
-        transform: pair.after.transform,
-        takenAt: pair.after.takenAt,
-        shot: { width: pair.after.width, height: pair.after.height },
-      },
-    }
-  }
-
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
   const previewUrl = useObjectUrl(previewBlob)
 
@@ -190,13 +189,11 @@ export function CompareScreen() {
   // maximale réduite — c est ce qui garantit que l aperçu et l export ne peuvent pas
   // diverger. Temporisé pour ne pas réencoder à chaque pixel parcouru par le curseur.
   useEffect(() => {
-    if (sheet !== 'image' || !ready) return
-    const inputs = inputsFor()
-    if (!inputs || !frame) return
+    if (sheet !== 'image' || !ready || !frame) return
 
     let cancelled = false
     const timer = setTimeout(() => {
-      renderSideBySide(inputs.before, inputs.after, frame, options.image, PREVIEW_MAX_EDGE)
+      renderSideBySide(shots.map(toComparisonInput), frame, options.image, PREVIEW_MAX_EDGE)
         .then((blob) => {
           if (!cancelled) setPreviewBlob(blob)
         })
@@ -211,18 +208,15 @@ export function CompareScreen() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [sheet, ready, pair, frame, beforeBitmap, afterBitmap, options.image])
+  }, [sheet, ready, shots, frame, options.image])
 
   async function exportJpeg() {
-    const inputs = inputsFor()
-    // `busy` verrouille les deux boutons : sans lui, une double tape ou une tape sur
-    // l autre export lancerait un second travail concurrent, donc deux partages.
-    if (!inputs || !frame || !viewpoint || !pair || busy) return
+    if (!ready || !frame || !viewpoint || busy) return
     setBusy('jpeg')
     setFooterStatus("Génération de l'image…")
     try {
-      const blob = await renderSideBySide(inputs.before, inputs.after, frame, options.image)
-      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.jpg`
+      const blob = await renderSideBySide(shots.map(toComparisonInput), frame, options.image)
+      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(shots.at(-1)!.takenAt)}.jpg`
       const outcome = await shareOrDownload(new File([blob], name, { type: 'image/jpeg' }))
       setFooterStatus(outcome === 'downloaded' ? 'Image téléchargée.' : null)
     } catch {
@@ -237,8 +231,8 @@ export function CompareScreen() {
   }
 
   async function exportAnimation() {
-    const inputs = inputsFor()
-    if (!inputs || !frame || !viewpoint || !pair || busy) return
+    if (!ready || !frame || !viewpoint || busy) return
+    const inputs = shots.map(toComparisonInput)
     const controller = new AbortController()
     abortRef.current = controller
     // Choisi une seule fois par export : MediaRecorder ne change pas de format en
@@ -249,19 +243,19 @@ export function CompareScreen() {
     setProgress(0)
     try {
       const blob = mime
-        ? await renderCrossfadeVideo(inputs.before, inputs.after, frame, {
+        ? await renderCrossfadeVideo(inputs, frame, {
             ...options.video,
-            onProgress: (done, total) => setProgress(done / total),
+            onProgress: (done: number, total: number) => setProgress(done / total),
             signal: controller.signal,
           })
-        : await renderCrossfadeGif(inputs.before, inputs.after, frame, {
+        : await renderCrossfadeGif(inputs, frame, {
             transition: options.video.transition,
             width: options.video.width,
-            onProgress: (done, total) => setProgress(done / total),
+            onProgress: (done: number, total: number) => setProgress(done / total),
             signal: controller.signal,
           })
       const ext = mime ? 'mp4' : 'gif'
-      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(pair.after.takenAt)}.${ext}`
+      const name = `b4after-${slugify(viewpoint.name)}-${fileStamp(shots.at(-1)!.takenAt)}.${ext}`
       const outcome = await shareOrDownload(new File([blob], name, { type: mime ?? 'image/gif' }))
       setFooterStatus(outcome === 'downloaded' ? 'Export téléchargé.' : null)
     } catch (caught) {
@@ -314,7 +308,7 @@ export function CompareScreen() {
         </Link>
       }
       footer={
-        pair && (
+        ready && (
           <div className="p-2">
             {status && (
               <p
@@ -345,48 +339,15 @@ export function CompareScreen() {
       }
     >
       <div className="flex h-full flex-col gap-4 p-4">
-        {pair && frame && (
-          <>
-            <div className="flex min-h-0 flex-1">
-              <RevealSlider
-                before={
-                  <ShotCanvas
-                    source={beforeBitmap}
-                    transform={pair.before.transform}
-                    frame={frame}
-                    shot={{ width: pair.before.width, height: pair.before.height }}
-                    className="h-full w-full object-contain"
-                  />
-                }
-                after={
-                  <ShotCanvas
-                    source={afterBitmap}
-                    transform={pair.after.transform}
-                    frame={frame}
-                    shot={{ width: pair.after.width, height: pair.after.height }}
-                    className="h-full w-full object-contain"
-                  />
-                }
-              />
-            </div>
-
-            <p className="shrink-0 text-center text-sm text-slate-400">
-              {formatDate(pair.before.takenAt)} → {formatDate(pair.after.takenAt)}
-            </p>
-
-            {!ready && (
-              <p className="shrink-0 text-center text-sm text-slate-400">
-                {bitmapError
-                  ? 'Impossible de préparer ces photos pour la comparaison.'
-                  : 'Préparation des photos…'}
-              </p>
-            )}
-          </>
+        {ready && frame && (
+          <div className="flex min-h-0 flex-1">
+            <SeriesScrubber shots={shots} frame={frame} />
+          </div>
         )}
 
-        {/* Hors du bloc `pair` : c est ici que s affiche « Comparaison introuvable ».
-            Le statut de la barre du bas, lui, n existe que quand il y a une paire. */}
-        {!pair && status && (
+        {/* Hors du bloc `ready` : c est ici que s affiche « Comparaison introuvable ».
+            Le statut de la barre du bas, lui, n existe que quand la série est prête. */}
+        {!ready && status && (
           <p data-testid="export-status" className="text-center text-sm text-slate-300">
             {status}
           </p>
@@ -423,6 +384,13 @@ export function CompareScreen() {
           value={options.image.layout}
           options={LAYOUT_LABELS}
           onChange={(layout) => updateOptions({ image: { layout } })}
+        />
+        <OptionRow
+          testId="image-width"
+          label="Largeur"
+          value={options.image.width}
+          options={IMAGE_WIDTH_LABELS}
+          onChange={(width) => updateOptions({ image: { width } })}
         />
         <div className="space-y-2">
           <label htmlFor="stamp-scale" className="text-sm text-slate-300">
@@ -469,7 +437,7 @@ export function CompareScreen() {
           testId="video-width"
           label="Qualité"
           value={options.video.width}
-          options={WIDTH_LABELS}
+          options={VIDEO_WIDTH_LABELS}
           onChange={(width) => updateOptions({ video: { width } })}
         />
         {/* La durée d affichage ne s applique pas au repli GIF : il boucle à l infini

@@ -7,19 +7,26 @@ export type VideoWidth = 640 | 1080 | 'full'
 export type HoldDuration = 'short' | 'medium' | 'long'
 /** Vitesse du fondu vidéo ; voir `FADE_DURATION_MS` dans video.ts pour les durées. */
 export type Pace = 'slow' | 'normal' | 'fast'
+/**
+ * Plafond par photo de l image côte-à-côte, en pixels du plus grand côté ; `'full'`
+ * lève le plafond (dimensions du cadre). Pendant exact de `VideoWidth` pour l image
+ * (voir la spec de comparaison de série).
+ */
+export type ImageWidth = 1024 | 2048 | 'full'
 
-export type ImageOptions = { stamp: StampMode; layout: Layout; stampScale: number }
+export type ImageOptions = { stamp: StampMode; layout: Layout; stampScale: number; width: ImageWidth }
 export type VideoOptions = { transition: Transition; width: VideoWidth; hold: HoldDuration; pace: Pace }
 export type ExportOptions = { image: ImageOptions; video: VideoOptions }
 
 export const STORAGE_KEY = 'b4after.exportOptions'
 
 // Ces défauts reproduisent le comportement d avant l existence des options : bandeau
-// de dates affiché, disposition déduite de l orientation du cadre, fondu à 640 px
-// avec une durée d affichage moyenne pour chaque photo. Les changer changerait le
-// rendu de tous ceux qui n ont jamais ouvert une feuille de réglages.
+// de dates affiché, disposition déduite de l orientation du cadre, fondu à 640 px avec
+// une durée d affichage moyenne pour chaque photo, plafond de 2048 px par photo pour
+// l image. Les changer changerait le rendu de tous ceux qui n ont jamais ouvert une
+// feuille de réglages.
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
-  image: { stamp: 'date', layout: 'auto', stampScale: 1 },
+  image: { stamp: 'date', layout: 'auto', stampScale: 1, width: 2048 },
   video: { transition: 'crossfade', width: 640, hold: 'medium', pace: 'normal' },
 }
 
@@ -28,6 +35,7 @@ export const LAYOUTS: readonly Layout[] = ['auto', 'horizontal', 'vertical']
 export const TRANSITIONS: readonly Transition[] = ['crossfade', 'cut', 'wipe']
 export const VIDEO_WIDTHS: readonly VideoWidth[] = [640, 1080, 'full']
 export const HOLD_DURATIONS: readonly HoldDuration[] = ['short', 'medium', 'long']
+export const IMAGE_WIDTHS: readonly ImageWidth[] = [1024, 2048, 'full']
 export const PACES: readonly Pace[] = ['slow', 'normal', 'fast']
 export const STAMP_SCALE_MIN = 0.5
 export const STAMP_SCALE_MAX = 2
@@ -84,6 +92,7 @@ export function parseExportOptions(raw: string | null): ExportOptions {
         STAMP_SCALE_MAX,
         fallback.image.stampScale,
       ),
+      width: oneOf(IMAGE_WIDTHS, image.width, fallback.image.width),
     },
     video: {
       transition: oneOf(TRANSITIONS, video.transition, fallback.video.transition),

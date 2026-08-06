@@ -21,10 +21,10 @@ describe('transitionSteps', () => {
 })
 
 describe('scaleInput', () => {
-  it('met la translation et les dimensions à l échelle, pas la source', () => {
-    const source = {} as never
+  it('met la translation et les dimensions à l échelle, pas le blob', () => {
+    const blob = {} as never
     const input = {
-      source,
+      blob,
       transform: { ...IDENTITY, tx: 100, ty: -40 },
       takenAt: 123,
       shot: { width: 1200, height: 1600 },
@@ -34,7 +34,7 @@ describe('scaleInput', () => {
 
     expect(scaled.transform).toEqual({ ...IDENTITY, tx: 50, ty: -20 })
     expect(scaled.shot).toEqual({ width: 600, height: 800 })
-    expect(scaled.source).toBe(source)
+    expect(scaled.blob).toBe(blob)
     // `takenAt` ne sert qu au bandeau de l image côte-à-côte : il n a rien à faire
     // dans une entrée de rendu animé.
     expect(scaled).not.toHaveProperty('takenAt')
