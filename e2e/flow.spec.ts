@@ -227,6 +227,79 @@ test('importe une photo existante en reprise sans rien écrire avant validation 
   expect(count).toBe(1)
 })
 
+test('le bouton d import survit au refus de la caméra, sur l écran de référence', async ({
+  page,
+}) => {
+  // Neutraliser `getUserMedia` avant tout chargement de page : une fois le document
+  // chargé, la navigation vers l écran de capture est purement côté client (routeur
+  // React), donc rien ne rechargerait le script d init à temps.
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('refusé', 'NotAllowedError'))
+  })
+  // Le `beforeEach` du fichier a déjà chargé la page avant l installation du script
+  // ci-dessus : sans reprendre `resetDb` ici, le mock ne s appliquerait jamais.
+  await resetDb(page)
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+  await page.getByTestId('new-viewpoint').click()
+
+  await expect(page.getByTestId('camera-denied')).toBeVisible()
+  await expect(page.getByTestId('shutter')).toHaveCount(0)
+
+  // Le bouton d import doit rester là, et fonctionner exactement comme sans refus.
+  const buffer = await makePngBuffer(page, 480, 360)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  const sheet = page.getByTestId('name-sheet')
+  await expect(sheet).toBeVisible()
+  await page.getByTestId('name-confirm').click()
+
+  await expect(page.getByTestId('viewpoint-item')).toContainText('1 photo')
+
+  const stored = await page.evaluate(async () => {
+    const { listViewpoints } = await import('/src/db/viewpoints.ts')
+    const [viewpoint] = await listViewpoints()
+    return { width: viewpoint.frameWidth, height: viewpoint.frameHeight }
+  })
+  expect(stored).toEqual({ width: 480, height: 360 })
+})
+
+test('le bouton d import survit au refus de la caméra, sur l écran de reprise', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException('refusé', 'NotAllowedError'))
+  })
+  const { viewpointId } = await seed(page, 'Façade nord')
+  // `seed` n écrit qu en IndexedDB, sans navigation : le mock n est pris en compte
+  // qu à partir de ce rechargement.
+  await page.reload()
+  await page.getByRole('button', { name: "J'ai compris" }).click()
+
+  await page.getByTestId('retake').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/capture$`))
+
+  await expect(page.getByTestId('camera-denied')).toBeVisible()
+  await expect(page.getByTestId('shutter')).toHaveCount(0)
+
+  const buffer = await makePngBuffer(page, 500, 375)
+  await page
+    .getByTestId('pick-photo-input')
+    .setInputFiles({ name: 'photo-importee.png', mimeType: 'image/png', buffer })
+
+  // Même invariant qu une prise : rien n est écrit avant validation du calage.
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/align$`))
+
+  const count = await page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).length
+  }, viewpointId)
+  expect(count).toBe(1)
+})
+
 test('le fantôme montre la dernière photo, pas la première', async ({ page }) => {
   const { viewpointId } = await seed(page, 'Façade nord') // première photo, rouge
   // Deuxième photo, bleue : c est elle que le fantôme doit montrer.
