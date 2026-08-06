@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatDateTime } from './format'
+import { formatDate, formatDateTime, formatSeconds } from './format'
 
 describe('formatDate', () => {
   it('formate en JJ/MM/AAAA', () => {
@@ -25,5 +25,15 @@ describe('formatDateTime', () => {
 
   it('affiche minuit sans le confondre avec midi', () => {
     expect(formatDateTime(new Date(2026, 0, 5, 0, 0).getTime())).toBe('05/01/2026 à 00:00')
+  })
+})
+
+describe('formatSeconds', () => {
+  it('affiche une décimale avec une virgule française', () => {
+    expect(formatSeconds(3600)).toBe('3,6 s')
+  })
+
+  it('garde la décimale même quand elle est nulle', () => {
+    expect(formatSeconds(21000)).toBe('21,0 s')
   })
 })

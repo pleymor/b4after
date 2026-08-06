@@ -4,6 +4,7 @@ import { getViewpoint } from '@/db/viewpoints'
 import { useExportOptions } from '@/hooks/useExportOptions'
 import { useObjectUrl } from '@/hooks/useObjectUrl'
 import { useShots } from '@/hooks/useShots'
+import { formatSeconds } from '@/lib/format'
 import {
   STAMP_SCALE_MAX,
   STAMP_SCALE_MIN,
@@ -17,7 +18,7 @@ import {
 } from '@/lib/exportOptions'
 import { renderCrossfadeGif } from '@/render/gif'
 import { renderSideBySide, type ComparisonInput } from '@/render/sideBySide'
-import { renderCrossfadeVideo, supportedVideoMime } from '@/render/video'
+import { renderCrossfadeVideo, supportedVideoMime, videoDurationMs } from '@/render/video'
 import { shareOrDownload } from '@/share/shareOrDownload'
 import type { Shot, Size, Viewpoint } from '@/types'
 import { OptionRow } from './components/OptionRow'
@@ -171,6 +172,12 @@ export function CompareScreen() {
   // Choisi une fois pour l écran : sert à masquer le réglage de durée, qui ne
   // s applique pas au repli GIF.
   const videoSupported = supportedVideoMime() !== null
+
+  // Même formule que celle qui produit réellement la vidéo (voir `videoDurationMs`
+  // dans video.ts, appelée aussi par `renderCrossfadeVideo`) : affichée dans la
+  // feuille pour que le nombre de photos et les réglages en jeu se voient sans
+  // avoir à lancer l export d abord.
+  const videoDuration = videoDurationMs(shots.length, options.video)
 
   // Fermer la feuille pendant un encodage ferait disparaître d un coup la progression
   // et le bouton d annulation, sans aucun moyen de les retrouver : seul le bouton
@@ -468,6 +475,11 @@ export function CompareScreen() {
             disabled={options.video.transition === 'cut'}
           />
         )}
+        {/* Une estimation, pas une alerte : aucune couleur, aucun seuil, juste le
+            chiffre à lire avant d exporter (voir la spec de la durée annoncée). */}
+        <p data-testid="video-duration" className="text-center text-sm text-slate-400">
+          Durée estimée : {formatSeconds(videoDuration)}
+        </p>
         {/* data-testid historique : il datait de l export GIF que celui-ci remplace en
             priorité (avec repli sur GIF si la vidéo n est pas prise en charge). Le
             renommer serait un remue-ménage pour rien, les tests le ciblent déjà. */}

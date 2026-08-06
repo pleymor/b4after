@@ -1,4 +1,4 @@
-import type { HoldDuration, Pace, Transition, VideoWidth } from '@/lib/exportOptions'
+import type { HoldDuration, Pace, Transition, VideoOptions, VideoWidth } from '@/lib/exportOptions'
 import type { Size } from '@/types'
 import {
   decodeScaled,
@@ -31,6 +31,21 @@ const FADE_DURATION_MS: Record<Pace, number> = {
   slow: 1800,
   normal: 1200,
   fast: 700,
+}
+
+/**
+ * Durée totale annoncée pour une série de `count` photos avec ces options : N
+ * paliers + N-1 fondus (nuls en coupe franche, voir `fadeMs` dans
+ * `renderCrossfadeVideo`). Seule source de vérité pour ce calcul —
+ * `renderCrossfadeVideo` appelle cette même fonction pour son propre total, plutôt
+ * que de recalculer la formule de son côté, afin que le chiffre annoncé à
+ * l utilisateur et la vidéo produite ne puissent jamais diverger.
+ */
+export function videoDurationMs(count: number, options: VideoOptions): number {
+  const holdMs = HOLD_DURATION_MS[options.hold]
+  const fadeMs = options.transition === 'cut' ? 0 : FADE_DURATION_MS[options.pace]
+  const gaps = Math.max(0, count - 1)
+  return count * holdMs + gaps * fadeMs
 }
 
 const VIDEO_MIME_CANDIDATES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
@@ -203,8 +218,15 @@ export async function renderCrossfadeVideo(
 
   // Un seul passage sur toute la série : N paliers, N-1 fondus (éventuellement nuls
   // en coupe franche) — la généralisation directe du passage unique à deux photos.
-  const gaps = count - 1
-  const totalMs = count * holdMs + gaps * fadeMs
+  // Même formule que celle annoncée dans la feuille de réglages avant l export (voir
+  // `videoDurationMs`), et non recalculée ici : le chiffre affiché et la vidéo
+  // produite ne peuvent ainsi jamais diverger.
+  const totalMs = videoDurationMs(count, {
+    transition,
+    width: options.width ?? VIDEO_MAX_WIDTH,
+    hold: options.hold ?? 'medium',
+    pace,
+  })
 
   return new Promise<Blob>((resolve, reject) => {
     let settled = false

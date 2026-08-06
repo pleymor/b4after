@@ -1332,6 +1332,57 @@ test('renderCrossfadeVideo dure hold + fondu + hold, à la tolérance d encodage
   expect(Math.abs(result.elapsedMs - expectedMs)).toBeLessThan(300)
 })
 
+test("l'annonce de videoDurationMs correspond au temps réel de rendu, à la tolérance d encodage près", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (helpers) => {
+    eval(helpers)
+    const { renderCrossfadeVideo, videoDurationMs } = await import('/src/render/video.ts')
+    const { IDENTITY } = await import('/src/align/transform.ts')
+
+    const frame = { width: 100, height: 150 }
+    const solid = async (color) => ({
+      blob: await window.__solidBlob(100, 150, color),
+      transform: IDENTITY,
+      takenAt: 0,
+      shot: frame,
+    })
+
+    const inputs = [await solid('#ff0000'), await solid('#00ff00'), await solid('#0000ff')]
+    const options = { transition: 'crossfade', width: 640, hold: 'medium', pace: 'normal' }
+    const announcedMs = videoDurationMs(inputs.length, options)
+
+    // Même technique que le test « dure hold + fondu + hold » ci-dessus, réutilisée
+    // ici : le temps réel mis par la fonction elle-même, chronométré par
+    // performance.now() autour de l appel, plutôt que la durée relue depuis le blob
+    // produit — un MP4 issu de MediaRecorder ne restitue pas cette durée de façon
+    // fiable dans ce banc d essai (voir DURATION_HELPER plus haut).
+    let reportedTotal = null
+    const startedAt = performance.now()
+    await renderCrossfadeVideo(inputs, frame, {
+      ...options,
+      onProgress: (_done, total) => {
+        reportedTotal = total
+      },
+    })
+    const elapsedMs = performance.now() - startedAt
+
+    return { announcedMs, elapsedMs, reportedTotal }
+  }, HELPERS)
+
+  expect(Math.abs(result.elapsedMs - result.announcedMs)).toBeLessThan(400)
+
+  // Assertion complémentaire, plus stricte : le total transmis à `onProgress` par
+  // `renderCrossfadeVideo` doit être exactement celui de `videoDurationMs`, et pas
+  // seulement proche. La comparaison au temps réel ci-dessus tolère 400 ms
+  // d encodage et ne remarquerait donc pas une divergence de quelques centaines de
+  // millisecondes sur le total interne — celle-ci le fait, à l égalité près, parce
+  // que `total` ne sert qu au calcul de progression et n influence jamais les
+  // pauses réellement attendues par la boucle de rendu (voir le commentaire sur
+  // `totalMs` dans video.ts).
+  expect(result.reportedTotal).toBe(result.announcedMs)
+})
+
 test('renderCrossfadeVideo dure plus longtemps avec une durée de photos longue que courte, à rythme égal', async ({
   page,
 }) => {

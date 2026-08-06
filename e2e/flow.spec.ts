@@ -845,6 +845,29 @@ test('la ligne « Rythme » est désactivée en coupe franche, faute de fondu à
   await expect(paceRadio).toBeEnabled()
 })
 
+test('la feuille vidéo affiche une durée estimée qui suit la durée des photos et le rythme', async ({
+  page,
+}) => {
+  const { viewpointId } = await seedPair(page)
+  await page.goto(`/v/${viewpointId}/compare`)
+
+  await page.getByTestId('open-video-options').click()
+  const duration = page.getByTestId('video-duration')
+
+  // Deux photos aux réglages par défaut (durée moyenne 1200 ms, rythme normal
+  // 1200 ms, voir HOLD_DURATION_MS et FADE_DURATION_MS dans video.ts) :
+  // 2 * 1200 + 1200 = 3600 ms.
+  await expect(duration).toHaveText('Durée estimée : 3,6 s')
+
+  // Durée « Longue » (2000 ms) : 2 * 2000 + 1200 = 5200 ms.
+  await page.getByTestId('video-hold').getByRole('radio', { name: 'Longue' }).click()
+  await expect(duration).toHaveText('Durée estimée : 5,2 s')
+
+  // Rythme « Lent » (fondu 1800 ms) en plus : 2 * 2000 + 1800 = 5800 ms.
+  await page.getByTestId('video-pace').getByRole('radio', { name: 'Lent' }).click()
+  await expect(duration).toHaveText('Durée estimée : 5,8 s')
+})
+
 test('la comparaison ne défile pas sur un écran de téléphone', async ({ page }) => {
   // Écran de téléphone : c est là que le problème se posait, l image y prenant
   // presque toute la hauteur utile.

@@ -13,3 +13,13 @@ export function formatDateTime(timestamp: number): string {
   const minutes = String(date.getMinutes()).padStart(2, '0')
   return `${formatDate(timestamp)} à ${hours}:${minutes}`
 }
+
+/**
+ * Formate une durée en millisecondes en secondes avec une décimale et une virgule
+ * française, ex. « 3,6 s ». Toujours une décimale, contrairement à `formatBytes`
+ * dans storage.ts qui l omet à zéro : c est une estimation, une décimale fixe
+ * évite qu elle ne semble sauter entre deux formats selon la valeur.
+ */
+export function formatSeconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
+}
