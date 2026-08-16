@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { favicon } from './build/favicon.ts'
 
 /**
  * Révision git courte, ou `'dev'` quand le build ne part pas d un dépôt — une archive
@@ -23,10 +24,23 @@ function shortSha(): string {
 }
 
 
+/**
+ * Le fond du logo, échantillonné dans `public/logo.png`. Sert à combler le
+ * rembourrage des icônes masquables : toute autre teinte dessinerait une bordure
+ * visible autour de la marque. Volontairement distinct du `theme_color`, qui
+ * habille le navigateur et suit la palette de l app, pas celle de l icône.
+ *
+ * `build/favicon.ts` en garde une copie, pour la même raison.
+ */
+const ICON_BG = '#161a22'
+
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // Avant VitePWA, dont le préréglage ci-dessous laisse volontairement la
+    // favicon à ce plugin : le logo entier est illisible à 16 px.
+    favicon(),
     VitePWA({
       // `prompt` et non `autoUpdate` : le nouveau service worker attend au lieu de
       // s imposer. C est l app qui propose le rechargement, et l utilisateur qui
@@ -36,7 +50,45 @@ export default defineConfig({
       // L enregistrement est fait par `useRegisterSW` dans UpdateNotice, pas par un
       // script injecté : sinon le service worker serait enregistré deux fois.
       injectRegister: null,
-      pwaAssets: { image: 'public/icon.svg' },
+      // `public/logo.png` est la source unique de toutes les icônes, générées au
+      // build. Elle doit vivre dans `public/` : ailleurs, le plugin ne produit
+      // silencieusement aucune icône alors que le manifeste continue de les
+      // annoncer. Le préréglage est décrit en entier plutôt que repris de
+      // `minimal-2023`, dont les valeurs par défaut supposent un logo entouré de
+      // marge — le nôtre est plein cadre.
+      pwaAssets: {
+        image: 'public/logo.png',
+        preset: {
+          // Aucun rembourrage : la marque occupe tout le carré et c est le
+          // système qui applique SON arrondi. Rembourrer ici ajouterait un liseré
+          // autour de l icône, et arrondir en amont donnerait un double arrondi.
+          //
+          // Le `favicons` du préréglage est laissé vide : à 16 px le logo entier
+          // ne dit plus rien, et `build/favicon.ts` en recadre la signature. Un
+          // seul producteur de `favicon.ico`, sinon tous deux se disputeraient le
+          // même nom de fichier.
+          transparent: {
+            sizes: [64, 192, 512],
+            padding: 0,
+            resizeOptions: { fit: 'contain', background: ICON_BG },
+          },
+          // Android rogne les icônes masquables jusqu au cercle inscrit à 80 % du
+          // côté. Sans retrait, la pointe du « 4 » passerait dehors : on réduit
+          // la marque à 80 % et on comble avec son propre fond.
+          maskable: {
+            sizes: [512],
+            padding: 0.1,
+            resizeOptions: { fit: 'contain', background: ICON_BG },
+          },
+          // iOS arrondit les coins mais ne rogne pas : plein cadre, comme les
+          // icônes classiques.
+          apple: {
+            sizes: [180],
+            padding: 0,
+            resizeOptions: { fit: 'contain', background: ICON_BG },
+          },
+        },
+      },
       manifest: {
         name: 'b4after — comparaisons avant/après',
         short_name: 'b4after',
@@ -48,7 +100,9 @@ export default defineConfig({
         theme_color: '#0f172a',
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // `ico` pour la favicon : l ancienne icône SVG était précachée par le
+        // motif `svg`, le format a changé, le hors ligne doit suivre.
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2,ico}'],
         // Les deux réglages sont indépendants et on veut le meilleur de chacun.
         // `clientsClaim` fait prendre le contrôle dès la PREMIÈRE visite, sans quoi
         // le hors ligne ne marcherait qu au deuxième chargement. `skipWaiting` à faux
