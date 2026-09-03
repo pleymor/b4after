@@ -12,7 +12,7 @@ import {
   nextViewpointName,
   renameViewpoint,
 } from './viewpoints'
-import { addShot, deleteShot, getShot, listShots } from './shots'
+import { addShot, deleteShot, getShot, listShots, reorderShots } from './shots'
 
 function jpeg(marker: string): Blob {
   return new Blob([marker], { type: 'image/jpeg' })
@@ -105,6 +105,19 @@ describe('viewpoints', () => {
     expect(await summary.coverThumb?.text()).toBe('t-recente')
   })
 
+  it('prend pour vignette la dernière photo de l ordre manuel', async () => {
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const ancienne = await seedShot(vp.id, 'ancienne')
+    await new Promise((r) => setTimeout(r, 2))
+    const recente = await seedShot(vp.id, 'recente')
+
+    await reorderShots(vp.id, [recente.id, ancienne.id])
+
+    const [summary] = await listViewpoints()
+    expect(await summary.coverThumb?.text()).toBe('t-ancienne')
+    expect(summary.lastShotAt).toBe(ancienne.takenAt)
+  })
+
   it('renvoie un résumé vide pour un point de vue sans photo', async () => {
     await createViewpoint({ name: 'A', frameWidth: 1, frameHeight: 1 })
     const [summary] = await listViewpoints()
@@ -167,6 +180,79 @@ describe('shots', () => {
     expect((await listShots(vp.id)).map((s) => s.id)).toEqual([first.id, second.id])
   })
 
+  it('numérote les rangs dans l ordre d ajout', async () => {
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const a = await seedShot(vp.id, 'a')
+    const b = await seedShot(vp.id, 'b')
+    const c = await seedShot(vp.id, 'c')
+    expect([a.order, b.order, c.order]).toEqual([0, 1, 2])
+  })
+
+  it('repart de zéro pour chaque point de vue', async () => {
+    // Un compteur global ferait passer un tri par rang : c est le rang *dans la
+    // série* qui doit repartir à zéro, sinon le fantôme d un point de vue neuf
+    // dépendrait des photos des autres.
+    const a = await createViewpoint({ name: 'A', frameWidth: 1, frameHeight: 1 })
+    const b = await createViewpoint({ name: 'B', frameWidth: 1, frameHeight: 1 })
+    await seedShot(a.id)
+    await seedShot(a.id)
+    const premiere = await seedShot(b.id)
+    expect(premiere.order).toBe(0)
+  })
+
+  it('liste dans l ordre manuel, pas dans l ordre chronologique', async () => {
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const a = await seedShot(vp.id, 'a')
+    await new Promise((r) => setTimeout(r, 2))
+    const b = await seedShot(vp.id, 'b')
+    await new Promise((r) => setTimeout(r, 2))
+    const c = await seedShot(vp.id, 'c')
+
+    await reorderShots(vp.id, [c.id, a.id, b.id])
+
+    expect((await listShots(vp.id)).map((s) => s.id)).toEqual([c.id, a.id, b.id])
+  })
+
+  it('ne touche pas aux dates en réordonnant', async () => {
+    // `takenAt` reste la date de prise de vue : c est elle qui est affichée dans la
+    // liste et qui nomme les fichiers exportés.
+    const vp = await createViewpoint({ name: 'A', frameWidth: 1, frameHeight: 1 })
+    const a = await seedShot(vp.id, 'a')
+    await new Promise((r) => setTimeout(r, 2))
+    const b = await seedShot(vp.id, 'b')
+
+    await reorderShots(vp.id, [b.id, a.id])
+
+    expect((await getShot(a.id))?.takenAt).toBe(a.takenAt)
+    expect((await getShot(b.id))?.takenAt).toBe(b.takenAt)
+  })
+
+  it('ignore un identifiant étranger à la série', async () => {
+    // Sans ce garde-fou, un rang venu d un autre point de vue écraserait celui de sa
+    // propre série et brouillerait son ordre à distance.
+    const cible = await createViewpoint({ name: 'Cible', frameWidth: 1, frameHeight: 1 })
+    const voisin = await createViewpoint({ name: 'Voisin', frameWidth: 1, frameHeight: 1 })
+    const a = await seedShot(cible.id, 'a')
+    const b = await seedShot(cible.id, 'b')
+    const etrangere = await seedShot(voisin.id, 'etrangere')
+
+    await reorderShots(cible.id, [b.id, etrangere.id, a.id])
+
+    expect((await listShots(cible.id)).map((s) => s.id)).toEqual([b.id, a.id])
+    expect((await getShot(etrangere.id))?.order).toBe(etrangere.order)
+  })
+
+  it('place la nouvelle photo en fin de série même après un réordonnancement', async () => {
+    // Le fantôme de la prise suivante est `listShots().at(-1)` : une photo qui
+    // n atterrirait pas en dernier ferait caler la reprise sur la mauvaise image.
+    const vp = await createViewpoint({ name: 'A', frameWidth: 1, frameHeight: 1 })
+    const a = await seedShot(vp.id, 'a')
+    const b = await seedShot(vp.id, 'b')
+    await reorderShots(vp.id, [b.id, a.id])
+    const c = await seedShot(vp.id, 'c')
+    expect((await listShots(vp.id)).map((s) => s.id)).toEqual([b.id, a.id, c.id])
+  })
+
   it('n expose pas les photos des autres points de vue', async () => {
     const a = await createViewpoint({ name: 'A', frameWidth: 1, frameHeight: 1 })
     const b = await createViewpoint({ name: 'B', frameWidth: 1, frameHeight: 1 })
@@ -181,5 +267,74 @@ describe('shots', () => {
     await deleteShot(shot.id)
     expect(await getShot(shot.id)).toBeUndefined()
     expect(await getViewpoint(vp.id)).toBeDefined()
+  })
+})
+
+describe('migration du schéma', () => {
+  /** Recrée la base telle que la version 1 la laissait : aucun rang, aucun index d ordre. */
+  function openVersion1(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 1)
+      request.onupgradeneeded = () => {
+        const db = request.result
+        db.createObjectStore('viewpoints', { keyPath: 'id' })
+        const shots = db.createObjectStore('shots', { keyPath: 'id' })
+        shots.createIndex('by-viewpoint', ['viewpointId', 'takenAt'])
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  function put(db: IDBDatabase, store: string, value: unknown): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(store, 'readwrite')
+      tx.objectStore(store).put(value)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  }
+
+  it('numérote les séries existantes par ordre chronologique', async () => {
+    // Les bases déjà installées n ont pas de rang : sans reprise, `listShots` les
+    // trierait toutes sur `undefined` et l ordre affiché deviendrait arbitraire.
+    const legacy = await openVersion1()
+    await put(legacy, 'viewpoints', {
+      id: 'vp-1',
+      name: 'Ancienne base',
+      createdAt: 1,
+      frameWidth: 400,
+      frameHeight: 600,
+    })
+    const shot = (id: string, takenAt: number) => ({
+      id,
+      viewpointId: 'vp-1',
+      takenAt,
+      blob: jpeg(id),
+      thumbBlob: jpeg(`t-${id}`),
+      width: 400,
+      height: 600,
+      transform: IDENTITY,
+    })
+    await put(legacy, 'shots', shot('s-c', 300))
+    await put(legacy, 'shots', shot('s-a', 100))
+    await put(legacy, 'shots', shot('s-b', 200))
+    // Une seconde série : la numérotation repart de zéro pour chacune.
+    await put(legacy, 'viewpoints', {
+      id: 'vp-2',
+      name: 'Voisine',
+      createdAt: 2,
+      frameWidth: 400,
+      frameHeight: 600,
+    })
+    await put(legacy, 'shots', { ...shot('s-d', 50), viewpointId: 'vp-2' })
+    legacy.close()
+
+    expect((await listShots('vp-1')).map((s) => [s.id, s.order])).toEqual([
+      ['s-a', 0],
+      ['s-b', 1],
+      ['s-c', 2],
+    ])
+    expect((await listShots('vp-2')).map((s) => s.order)).toEqual([0])
   })
 })

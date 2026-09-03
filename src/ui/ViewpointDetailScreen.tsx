@@ -1,27 +1,89 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { deleteShot } from '@/db/shots'
+import { deleteShot, reorderShots } from '@/db/shots'
 import { deleteViewpoint, getViewpoint, renameViewpoint } from '@/db/viewpoints'
 import { useObjectUrl } from '@/hooks/useObjectUrl'
 import { useShots } from '@/hooks/useShots'
 import { formatDate } from '@/lib/format'
+import { moveBy, moveOnto } from '@/lib/reorder'
 import type { Shot, Viewpoint } from '@/types'
 import { Screen } from './components/Screen'
 
-function ShotRow({ shot, onDelete }: { shot: Shot; onDelete: () => void }) {
+function ShotRow({
+  shot,
+  rank,
+  total,
+  dragging,
+  reorderable,
+  onDelete,
+  onGrab,
+  onDragTo,
+  onDrop,
+  onMove,
+}: {
+  shot: Shot
+  rank: number
+  total: number
+  dragging: boolean
+  reorderable: boolean
+  onDelete: () => void
+  onGrab: () => void
+  onDragTo: (x: number, y: number) => void
+  onDrop: () => void
+  onMove: (delta: number) => void
+}) {
   const thumbUrl = useObjectUrl(shot.thumbBlob)
+  const date = formatDate(shot.takenAt)
 
   return (
-    <li data-testid="shot-item" className="flex items-center gap-3 border-b border-slate-800 p-3">
-      <div className="size-16 shrink-0 overflow-hidden rounded-lg bg-slate-700">
+    <li
+      data-testid="shot-item"
+      data-shot-id={shot.id}
+      className={`flex items-center gap-1 border-b border-slate-800 p-3 ${
+        dragging ? 'bg-slate-800 ring-1 ring-sky-500' : ''
+      }`}
+    >
+      {reorderable && (
+        <button
+          type="button"
+          data-testid="drag-shot"
+          aria-label={`Déplacer la photo du ${date}, ${rank}e sur ${total}`}
+          onPointerDown={(event) => {
+            // Capture du pointeur : sans elle, sortir de la poignée d un pixel
+            // couperait le glissement. `preventDefault` empêche le navigateur d y
+            // voir une sélection de texte ou le début d un défilement.
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            onGrab()
+          }}
+          onPointerMove={(event) => onDragTo(event.clientX, event.clientY)}
+          onPointerUp={onDrop}
+          onPointerCancel={onDrop}
+          onKeyDown={(event) => {
+            const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
+            if (delta === 0) return
+            // Le clavier double le glissement : la poignée s atteint à la tabulation,
+            // et un ordre qui ne se change qu au doigt serait hors de portée au
+            // clavier comme au lecteur d écran.
+            event.preventDefault()
+            onMove(delta)
+          }}
+          // `touch-none` est vital : sans lui le doigt ferait défiler la page au lieu
+          // de traîner la ligne, et le geste ne partirait jamais.
+          className="shrink-0 cursor-grab touch-none px-2 text-lg text-slate-500"
+        >
+          ≡
+        </button>
+      )}
+      <div className="ml-2 size-16 shrink-0 overflow-hidden rounded-lg bg-slate-700">
         {thumbUrl && <img src={thumbUrl} alt="" className="size-full object-cover" />}
       </div>
-      <p className="flex-1 text-sm">{formatDate(shot.takenAt)}</p>
+      <p className="ml-3 flex-1 text-sm">{date}</p>
       <button
         type="button"
         data-testid="delete-shot"
         onClick={onDelete}
-        aria-label={`Supprimer la photo du ${formatDate(shot.takenAt)}`}
+        aria-label={`Supprimer la photo du ${date}`}
         className="px-2 text-slate-400"
       >
         ✕
@@ -55,6 +117,52 @@ export function ViewpointDetailScreen() {
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [error, setError] = useState<string | null>(null)
+
+  // La série est tenue à l écran pendant qu on la remanie : le doigt doit voir les
+  // lignes bouger sous lui, bien avant que la base ne soit réécrite.
+  const [series, setSeries] = useState<Shot[]>([])
+  useEffect(() => setSeries(shots), [shots])
+
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  // L ordre au moment de la prise en main : sans lui, un simple appui sur la poignée,
+  // sans le moindre déplacement, déclencherait une écriture pour rien.
+  const grabbedOrder = useRef<string[]>([])
+
+  async function persistOrder(next: Shot[]) {
+    if (!id) return
+    setSeries(next)
+    setError(null)
+    try {
+      await reorderShots(
+        id,
+        next.map((shot) => shot.id),
+      )
+    } catch {
+      setError("Le nouvel ordre n'a pas pu être enregistré. Réessayez.")
+      // Remettre la liste sur ce que contient vraiment la base : laisser l ordre
+      // rêvé à l écran ferait croire à une réussite, et la comparaison suivante
+      // sortirait dans l ordre d avant.
+      reload()
+    }
+  }
+
+  function onDragTo(x: number, y: number) {
+    if (!draggingId) return
+    // Le survol se lit sous le pointeur plutôt que par un calcul de hauteurs : les
+    // lignes se réordonnent en place, donc la ligne traînée reste sous le doigt.
+    const over = document.elementFromPoint(x, y)?.closest('[data-shot-id]')
+    const overId = over?.getAttribute('data-shot-id')
+    if (!overId) return
+    setSeries((current) => moveOnto(current, draggingId, overId))
+  }
+
+  function onDrop() {
+    if (!draggingId) return
+    setDraggingId(null)
+    const ids = series.map((shot) => shot.id)
+    if (ids.join() === grabbedOrder.current.join()) return
+    void persistOrder(series)
+  }
 
   // Ces deux actions sont annoncées comme définitives : un échec silencieux
   // laisserait l utilisateur croire qu elles ont abouti.
@@ -118,9 +226,38 @@ export function ViewpointDetailScreen() {
         </p>
       )}
 
-      <ul>
-        {shots.map((shot) => (
-          <ShotRow key={shot.id} shot={shot} onDelete={() => onDeleteShot(shot.id)} />
+      {series.length > 1 && (
+        <p className="px-4 pt-3 text-xs text-slate-400">
+          Glissez ≡ pour changer l'ordre de la série. La dernière photo sert de repère à
+          la prise suivante.
+        </p>
+      )}
+
+      {/* `select-none` seulement pendant le glissement : hors geste, la date d une
+          photo reste sélectionnable et copiable. */}
+      <ul className={draggingId ? 'select-none' : undefined}>
+        {series.map((shot, index) => (
+          <ShotRow
+            key={shot.id}
+            shot={shot}
+            rank={index + 1}
+            total={series.length}
+            reorderable={series.length > 1}
+            dragging={shot.id === draggingId}
+            onDelete={() => onDeleteShot(shot.id)}
+            onGrab={() => {
+              grabbedOrder.current = series.map((item) => item.id)
+              setDraggingId(shot.id)
+            }}
+            onDragTo={onDragTo}
+            onDrop={onDrop}
+            onMove={(delta) => {
+              const next = moveBy(series, shot.id, delta)
+              // `moveBy` rend le tableau reçu quand la photo bute en haut ou en bas :
+              // une flèche maintenue n écrit alors rien.
+              if (next !== series) void persistOrder(next)
+            }}
+          />
         ))}
       </ul>
 

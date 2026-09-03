@@ -24,6 +24,15 @@ export type Shot = {
   id: string
   viewpointId: string
   takenAt: number
+  /**
+   * Rang dans la série, croissant. Détaché de `takenAt` : l'ordre est réordonnable à
+   * la main, et c'est lui — jamais la date — qui décide de la suite affichée,
+   * comparée, exportée, et de la photo qui sert de fantôme à la prise suivante.
+   *
+   * Les rangs sont contigus après un réordonnancement, mais une suppression les
+   * laisse troués : seul l'ordre relatif compte.
+   */
+  order: number
   /** JPEG plein format, tel que capturé. Jamais réécrit. */
   blob: Blob
   thumbBlob: Blob

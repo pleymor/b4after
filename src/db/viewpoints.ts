@@ -1,6 +1,6 @@
 import { IDENTITY } from '@/align/transform'
 import type { Shot, Viewpoint, ViewpointSummary } from '@/types'
-import { newId, openDb } from './schema'
+import { newId, openDb, seriesRange } from './schema'
 import { ensurePersistence } from './storage'
 
 export async function createViewpoint(input: {
@@ -29,9 +29,7 @@ export async function deleteViewpoint(id: string): Promise<void> {
   const db = await openDb()
   const tx = db.transaction(['viewpoints', 'shots'], 'readwrite')
   const index = tx.objectStore('shots').index('by-viewpoint')
-  for await (const cursor of index.iterate(
-    IDBKeyRange.bound([id, -Infinity], [id, Infinity]),
-  )) {
+  for await (const cursor of index.iterate(seriesRange(id))) {
     await cursor.delete()
   }
   await tx.objectStore('viewpoints').delete(id)
@@ -45,16 +43,15 @@ export async function deleteViewpoint(id: string): Promise<void> {
 export async function listViewpoints(): Promise<ViewpointSummary[]> {
   const db = await openDb()
   const viewpoints = await db.getAll('viewpoints')
-  const index = db.transaction('shots').store.index('by-viewpoint')
+  // Index d ordre, pas de date : la vignette d accueil doit montrer la fin de la
+  // série telle qu elle est rangée à la main, pas la prise la plus récente.
+  const index = db.transaction('shots').store.index('by-order')
 
   const summaries = await Promise.all(
     viewpoints.map(async (viewpoint) => {
-      const range = IDBKeyRange.bound(
-        [viewpoint.id, -Infinity],
-        [viewpoint.id, Infinity],
-      )
+      const range = seriesRange(viewpoint.id)
       const shotCount = await index.count(range)
-      // `prev` donne directement le cliché le plus récent de la série.
+      // `prev` donne directement le dernier cliché de la série.
       const latest = await index.openCursor(range, 'prev')
       return {
         ...viewpoint,
@@ -104,6 +101,7 @@ export async function createViewpointWithFirstShot(input: {
     id: newId(),
     viewpointId: viewpoint.id,
     takenAt: now,
+    order: 0,
     blob: input.blob,
     thumbBlob: input.thumbBlob,
     width: input.width,

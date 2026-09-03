@@ -51,6 +51,61 @@ export async function seed(page: import('@playwright/test').Page, name: string) 
   }, name)
 }
 
+/** Crée un point de vue et `count` photos, dans leur ordre d ajout. */
+async function seedSeries(
+  page: import('@playwright/test').Page,
+  name: string,
+  count: number,
+): Promise<{ viewpointId: string; shotIds: string[] }> {
+  return page.evaluate(
+    async ({ viewpointName, count }) => {
+      const { createViewpoint } = await import('/src/db/viewpoints.ts')
+      const { addShot } = await import('/src/db/shots.ts')
+      const { IDENTITY } = await import('/src/align/transform.ts')
+
+      const canvas = new OffscreenCanvas(300, 400)
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#ff0000'
+      ctx.fillRect(0, 0, 300, 400)
+      const blob = await canvas.convertToBlob({ type: 'image/jpeg' })
+
+      const viewpoint = await createViewpoint({
+        name: viewpointName,
+        frameWidth: 300,
+        frameHeight: 400,
+      })
+      const shotIds: string[] = []
+      for (let i = 0; i < count; i += 1) {
+        // Deux millisecondes d écart : les dates affichées doivent rester distinctes,
+        // et l ordre d ajout doit être celui que la base garde au départ.
+        await new Promise((r) => setTimeout(r, 2))
+        const shot = await addShot({
+          viewpointId: viewpoint.id,
+          blob,
+          thumbBlob: blob,
+          width: 300,
+          height: 400,
+          transform: IDENTITY,
+        })
+        shotIds.push(shot.id)
+      }
+      return { viewpointId: viewpoint.id, shotIds }
+    },
+    { viewpointName: name, count },
+  )
+}
+
+/** L ordre réellement enregistré, par opposition à celui affiché. */
+async function storedOrder(
+  page: import('@playwright/test').Page,
+  viewpointId: string,
+): Promise<string[]> {
+  return page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).map((shot) => shot.id)
+  }, viewpointId)
+}
+
 /**
  * Fabrique un PNG valide de dimensions données, pour piloter le sélecteur de photos
  * via `setInputFiles`. Généré dans la page plutôt qu en dur : le navigateur produit
@@ -524,6 +579,64 @@ test("l écran de détail ne porte plus de boutons radio, et « Comparer » mèn
   await page.getByTestId('compare').click()
   // Plus de paramètres de requête : la comparaison porte sur toute la série.
   await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/compare$`))
+})
+
+test('glisser une photo la déplace dans la série et enregistre le nouvel ordre', async ({
+  page,
+}) => {
+  const { viewpointId, shotIds } = await seedSeries(page, 'Façade nord', 3)
+  const [a, b, c] = shotIds
+  await page.goto(`/v/${viewpointId}`)
+  const rows = page.getByTestId('shot-item')
+  await expect(rows).toHaveCount(3)
+
+  const handle = page.getByTestId('drag-shot').first()
+  const grip = (await handle.boundingBox())!
+  const last = (await rows.nth(2).boundingBox())!
+
+  // Le geste part de la poignée et descend jusqu à la dernière ligne : les lignes se
+  // réordonnent au passage, donc la photo traînée finit là où le doigt s arrête.
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip.x + grip.width / 2, last.y + last.height / 2, { steps: 12 })
+  await page.mouse.up()
+
+  await expect(rows.nth(0)).toHaveAttribute('data-shot-id', b)
+  await expect(rows.nth(1)).toHaveAttribute('data-shot-id', c)
+  await expect(rows.nth(2)).toHaveAttribute('data-shot-id', a)
+  await expect.poll(() => storedOrder(page, viewpointId)).toEqual([b, c, a])
+
+  // L écrit fait foi : un ordre qui ne survivrait pas au rechargement ne servirait à
+  // rien, ni pour la comparaison ni pour l export.
+  await page.reload()
+  await expect(page.getByTestId('shot-item').nth(2)).toHaveAttribute('data-shot-id', a)
+})
+
+test('les flèches déplacent la photo depuis la poignée, au clavier', async ({ page }) => {
+  const { viewpointId, shotIds } = await seedSeries(page, 'Façade nord', 3)
+  const [a, b, c] = shotIds
+  await page.goto(`/v/${viewpointId}`)
+  await expect(page.getByTestId('shot-item')).toHaveCount(3)
+
+  await page.getByTestId('drag-shot').first().focus()
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(() => storedOrder(page, viewpointId)).toEqual([b, a, c])
+
+  // Le focus suit la photo déplacée, sinon une seconde flèche agirait sur sa voisine.
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => storedOrder(page, viewpointId)).toEqual([a, b, c])
+
+  // En butée haute, la flèche ne fait pas boucler la photo en fin de série.
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => storedOrder(page, viewpointId)).toEqual([a, b, c])
+})
+
+test('une série d une seule photo ne propose aucune poignée', async ({ page }) => {
+  // Rien à réordonner : la poignée ne serait qu un bouton mort au bord de la ligne.
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}`)
+  await expect(page.getByTestId('shot-item')).toHaveCount(1)
+  await expect(page.getByTestId('drag-shot')).toHaveCount(0)
 })
 
 test('refuse de comparer une seule photo', async ({ page }) => {
