@@ -10,7 +10,7 @@ function ViewpointRow({ summary }: { summary: ViewpointSummary }) {
   const thumbUrl = useObjectUrl(summary.coverThumb)
 
   return (
-    // Deux liens frères, jamais imbriqués : le second (« Reprendre ») a été ajouté
+    // Deux liens frères, jamais imbriqués : le second (« Ajouter ») a été ajouté
     // après coup pour ramener la reprise à trois tapes depuis l accueil, et une
     // balise <a> ne peut pas en contenir une autre.
     <li className="flex items-center gap-2 border-b border-slate-800 px-4 py-3">
@@ -36,10 +36,10 @@ function ViewpointRow({ summary }: { summary: ViewpointSummary }) {
         <Link
           to={`/v/${summary.id}/capture`}
           data-testid="retake"
-          aria-label={`Reprendre la photo de ${summary.name}`}
+          aria-label={`Ajouter une photo à ${summary.name}`}
           className="shrink-0 rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200"
         >
-          Reprendre
+          Ajouter
         </Link>
       )}
     </li>

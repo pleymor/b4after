@@ -114,7 +114,7 @@ export function ViewpointDetailScreen() {
 
       {!loading && !shotsError && shots.length === 0 && (
         <p className="px-6 py-10 text-center text-sm text-slate-300">
-          Aucune photo dans ce point de vue. Reprenez-en une pour redémarrer la série.
+          Aucune photo dans ce point de vue. Ajoutez-en une pour redémarrer la série.
         </p>
       )}
 
@@ -130,7 +130,7 @@ export function ViewpointDetailScreen() {
           data-testid="retake-shot"
           className="block rounded-xl bg-sky-500 py-4 text-center font-semibold text-slate-950"
         >
-          Reprendre la photo
+          Ajouter une photo
         </Link>
         <button
           type="button"
