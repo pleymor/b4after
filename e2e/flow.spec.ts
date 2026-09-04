@@ -107,6 +107,76 @@ async function storedOrder(
 }
 
 /**
+ * Crée un point de vue et une photo par couleur donnée, dans l ordre.
+ *
+ * `photo` sert à donner aux photos d autres proportions que le cadre : à proportions
+ * égales la photo le couvre pile, `clampToCover` ne laisse aucun jeu, et rien ne peut
+ * être translaté. C est le cas d une photo importée, plus large que le cadre.
+ */
+async function seedColoredSeries(
+  page: import('@playwright/test').Page,
+  name: string,
+  colors: string[],
+  photo: { width: number; height: number } = { width: 300, height: 400 },
+): Promise<{ viewpointId: string; shotIds: string[] }> {
+  return page.evaluate(
+    async ({ viewpointName, colors, photo }) => {
+      const { createViewpoint } = await import('/src/db/viewpoints.ts')
+      const { addShot } = await import('/src/db/shots.ts')
+      const { IDENTITY } = await import('/src/align/transform.ts')
+
+      const viewpoint = await createViewpoint({
+        name: viewpointName,
+        frameWidth: 300,
+        frameHeight: 400,
+      })
+      const shotIds: string[] = []
+      for (const color of colors) {
+        const canvas = new OffscreenCanvas(photo.width, photo.height)
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = color
+        ctx.fillRect(0, 0, photo.width, photo.height)
+        const blob = await canvas.convertToBlob({ type: 'image/png' })
+        const shot = await addShot({
+          viewpointId: viewpoint.id,
+          blob,
+          thumbBlob: blob,
+          width: photo.width,
+          height: photo.height,
+          transform: IDENTITY,
+        })
+        shotIds.push(shot.id)
+      }
+      return { viewpointId: viewpoint.id, shotIds }
+    },
+    { viewpointName: name, colors, photo },
+  )
+}
+
+/** Couleur au centre d un des calques empilés sur la surface de calage. */
+async function layerColor(
+  page: import('@playwright/test').Page,
+  index: number,
+): Promise<[number, number, number]> {
+  return page.evaluate((layer) => {
+    const canvas = document
+      .querySelector('[data-testid="align-surface"]')!
+      .querySelectorAll('canvas')[layer] as HTMLCanvasElement
+    const ctx = canvas.getContext('2d')!
+    const { data } = ctx.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1)
+    return [data[0], data[1], data[2]] as [number, number, number]
+  }, index)
+}
+
+/** Le cadrage enregistré de chaque photo, dans l ordre de la série. */
+async function storedTransforms(page: import('@playwright/test').Page, viewpointId: string) {
+  return page.evaluate(async (id) => {
+    const { listShots } = await import('/src/db/shots.ts')
+    return (await listShots(id)).map((shot) => shot.transform)
+  }, viewpointId)
+}
+
+/**
  * Fabrique un PNG valide de dimensions données, pour piloter le sélecteur de photos
  * via `setInputFiles`. Généré dans la page plutôt qu en dur : le navigateur produit
  * l encodage, le test n a donc aucun octet à connaître par avance.
@@ -637,6 +707,101 @@ test('une série d une seule photo ne propose aucune poignée', async ({ page })
   await page.goto(`/v/${viewpointId}`)
   await expect(page.getByTestId('shot-item')).toHaveCount(1)
   await expect(page.getByTestId('drag-shot')).toHaveCount(0)
+})
+
+test('taper une photo de la série ouvre son recalage', async ({ page }) => {
+  const { viewpointId, shotIds } = await seedSeries(page, 'Façade nord', 2)
+  await page.goto(`/v/${viewpointId}`)
+
+  await page.getByTestId('realign-shot').first().click()
+
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}/shots/${shotIds[0]}/align$`))
+  await expect(page.getByTestId('align-surface')).toBeVisible()
+})
+
+test('recale une photo déjà enregistrée sans toucher aux autres', async ({ page }) => {
+  // Photos carrées dans un cadre 3:4 : il reste du jeu latéral, donc la photo peut
+  // réellement se déplacer.
+  const { viewpointId } = await seedColoredSeries(page, 'Façade nord', ['#f00', '#0f0'], {
+    width: 800,
+    height: 800,
+  })
+  await page.goto(`/v/${viewpointId}`)
+  await page.getByTestId('realign-shot').nth(1).click()
+
+  const surface = page.getByTestId('align-surface')
+  await expect(surface).toBeVisible()
+  const box = (await surface.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 5 })
+  await page.mouse.up()
+
+  await page.getByTestId('realign-confirm').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+
+  const transforms = await storedTransforms(page, viewpointId)
+  expect(transforms[1].tx).not.toBe(0)
+  // La photo recadrée est la seule touchée : sans quoi toute la série dériverait à
+  // chaque retouche.
+  expect(transforms[0]).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
+})
+
+test('quitter le recalage sans valider laisse le cadrage intact', async ({ page }) => {
+  const { viewpointId } = await seedColoredSeries(page, 'Façade nord', ['#f00', '#0f0'], {
+    width: 800,
+    height: 800,
+  })
+  await page.goto(`/v/${viewpointId}`)
+  await page.getByTestId('realign-shot').nth(1).click()
+
+  const surface = page.getByTestId('align-surface')
+  const box = (await surface.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 5 })
+  await page.mouse.up()
+
+  await page.getByTestId('realign-cancel').click()
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
+
+  const transforms = await storedTransforms(page, viewpointId)
+  expect(transforms[1]).toEqual({ scale: 1, rotation: 0, tx: 0, ty: 0 })
+})
+
+test('le recalage se cale sur la première photo de la série', async ({ page }) => {
+  // Rouge en premier, vert au milieu, bleu en dernier : le fantôme de la dernière doit
+  // être le rouge. Se caler sur la voisine ferait dériver la série de proche en proche.
+  const { viewpointId, shotIds } = await seedColoredSeries(page, 'Façade nord', [
+    '#ff0000',
+    '#00ff00',
+    '#0000ff',
+  ])
+  await page.goto(`/v/${viewpointId}/shots/${shotIds[2]}/align`)
+  await expect(page.getByTestId('align-surface')).toBeVisible()
+
+  await expect.poll(() => layerColor(page, 0)).toEqual([255, 0, 0])
+  await expect.poll(() => layerColor(page, 1)).toEqual([0, 0, 255])
+})
+
+test('recaler la première photo la cale sur la deuxième, faute de précédente', async ({
+  page,
+}) => {
+  const { viewpointId, shotIds } = await seedColoredSeries(page, 'Façade nord', [
+    '#ff0000',
+    '#00ff00',
+  ])
+  await page.goto(`/v/${viewpointId}/shots/${shotIds[0]}/align`)
+  await expect(page.getByTestId('align-surface')).toBeVisible()
+
+  await expect.poll(() => layerColor(page, 0)).toEqual([0, 255, 0])
+  await expect.poll(() => layerColor(page, 1)).toEqual([255, 0, 0])
+})
+
+test('recaler une photo introuvable renvoie à la série', async ({ page }) => {
+  const { viewpointId } = await seed(page, 'Façade nord')
+  await page.goto(`/v/${viewpointId}/shots/inexistante/align`)
+  await expect(page).toHaveURL(new RegExp(`/v/${viewpointId}$`))
 })
 
 test('refuse de comparer une seule photo', async ({ page }) => {

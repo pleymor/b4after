@@ -4,6 +4,7 @@ import { AlignScreen } from './ui/AlignScreen'
 import { CameraScreen } from './ui/CameraScreen'
 import { CompareScreen } from './ui/CompareScreen'
 import { SettingsScreen } from './ui/SettingsScreen'
+import { RealignScreen } from './ui/RealignScreen'
 import { ViewpointDetailScreen } from './ui/ViewpointDetailScreen'
 import { ViewpointListScreen } from './ui/ViewpointListScreen'
 import { CaptureFlash } from './ui/components/CaptureFlash'
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/v/:id/capture" element={<CameraScreen />} />
           <Route path="/v/:id/align" element={<AlignScreen />} />
           <Route path="/v/:id/compare" element={<CompareScreen />} />
+          <Route path="/v/:id/shots/:shotId/align" element={<RealignScreen />} />
           <Route path="/v/:id" element={<ViewpointDetailScreen />} />
           <Route path="/about" element={<AboutScreen />} />
           <Route path="/settings" element={<SettingsScreen />} />

@@ -59,6 +59,22 @@ export async function reorderShots(viewpointId: string, orderedIds: string[]): P
   await tx.done
 }
 
+/**
+ * Réécrit le seul placement d une photo dans le cadre, c est-à-dire son recadrage.
+ *
+ * Les pixels ne sont jamais retouchés : le calage est une donnée à part, relue au
+ * rendu de la comparaison et des exports, donc un recadrage se propage partout sans
+ * réencodage. Lecture et écriture dans une seule transaction, et silence si la photo
+ * a disparu entre-temps — la ressusciter serait pire que ne rien faire.
+ */
+export async function updateShotTransform(id: string, transform: Transform): Promise<void> {
+  const db = await openDb()
+  const tx = db.transaction('shots', 'readwrite')
+  const shot = await tx.store.get(id)
+  if (shot) await tx.store.put({ ...shot, transform })
+  await tx.done
+}
+
 export async function getShot(id: string): Promise<Shot | undefined> {
   return (await openDb()).get('shots', id)
 }

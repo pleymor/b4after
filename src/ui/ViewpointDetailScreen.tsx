@@ -11,6 +11,7 @@ import { Screen } from './components/Screen'
 
 function ShotRow({
   shot,
+  href,
   rank,
   total,
   dragging,
@@ -22,6 +23,8 @@ function ShotRow({
   onMove,
 }: {
   shot: Shot
+  /** Vers le recadrage de cette photo. */
+  href: string
   rank: number
   total: number
   dragging: boolean
@@ -39,7 +42,7 @@ function ShotRow({
     <li
       data-testid="shot-item"
       data-shot-id={shot.id}
-      className={`flex items-center gap-1 border-b border-slate-800 p-3 ${
+      className={`flex items-center gap-2 border-b border-slate-800 p-3 ${
         dragging ? 'bg-slate-800 ring-1 ring-sky-500' : ''
       }`}
     >
@@ -75,10 +78,20 @@ function ShotRow({
           ≡
         </button>
       )}
-      <div className="ml-2 size-16 shrink-0 overflow-hidden rounded-lg bg-slate-700">
-        {thumbUrl && <img src={thumbUrl} alt="" className="size-full object-cover" />}
-      </div>
-      <p className="ml-3 flex-1 text-sm">{date}</p>
+      {/* Frère de la poignée et de la croix, jamais leur parent : une balise <a> ne
+          peut pas contenir de bouton, et traîner la ligne ne doit pas naviguer — la
+          poignée capture le pointeur, donc le lien ne reçoit aucun clic. */}
+      <Link
+        to={href}
+        data-testid="realign-shot"
+        aria-label={`Recadrer la photo du ${date}`}
+        className="flex min-w-0 flex-1 items-center gap-3"
+      >
+        <div className="size-16 shrink-0 overflow-hidden rounded-lg bg-slate-700">
+          {thumbUrl && <img src={thumbUrl} alt="" className="size-full object-cover" />}
+        </div>
+        <p className="min-w-0 flex-1 truncate text-sm">{date}</p>
+      </Link>
       <button
         type="button"
         data-testid="delete-shot"
@@ -240,6 +253,7 @@ export function ViewpointDetailScreen() {
           <ShotRow
             key={shot.id}
             shot={shot}
+            href={`/v/${id}/shots/${shot.id}/align`}
             rank={index + 1}
             total={series.length}
             reorderable={series.length > 1}

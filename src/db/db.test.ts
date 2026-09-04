@@ -12,7 +12,14 @@ import {
   nextViewpointName,
   renameViewpoint,
 } from './viewpoints'
-import { addShot, deleteShot, getShot, listShots, reorderShots } from './shots'
+import {
+  addShot,
+  deleteShot,
+  getShot,
+  listShots,
+  reorderShots,
+  updateShotTransform,
+} from './shots'
 
 function jpeg(marker: string): Blob {
   return new Blob([marker], { type: 'image/jpeg' })
@@ -259,6 +266,45 @@ describe('shots', () => {
     await seedShot(a.id)
     await seedShot(b.id)
     expect(await listShots(a.id)).toHaveLength(1)
+  })
+
+  it('réécrit le cadrage sans toucher aux pixels ni à la date', async () => {
+    // Le recalage a posteriori ne réencode rien : la photo garde ses octets, sa
+    // vignette et sa date de prise de vue, seul son placement dans le cadre change.
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const shot = await seedShot(vp.id, 'pixels')
+    const recadre = { scale: 1.4, rotation: 0.1, tx: 12, ty: -8 }
+
+    await updateShotTransform(shot.id, recadre)
+
+    const stored = await getShot(shot.id)
+    expect(stored?.transform).toEqual(recadre)
+    expect(await stored?.blob.text()).toBe('pixels')
+    expect(await stored?.thumbBlob.text()).toBe('t-pixels')
+    expect(stored?.takenAt).toBe(shot.takenAt)
+    expect(stored?.order).toBe(shot.order)
+  })
+
+  it('ne recadre que la photo visée', async () => {
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const cible = await seedShot(vp.id, 'cible')
+    const voisine = await seedShot(vp.id, 'voisine')
+
+    await updateShotTransform(cible.id, { scale: 2, rotation: 0, tx: 0, ty: 0 })
+
+    expect((await getShot(voisine.id))?.transform).toEqual(IDENTITY)
+  })
+
+  it('ignore une photo supprimée entre-temps', async () => {
+    // L écran de recalage peut être encore ouvert quand la photo disparaît d un
+    // autre onglet : « Valider » ne doit pas la ressusciter, ni exploser.
+    const vp = await createViewpoint({ name: 'A', frameWidth: 400, frameHeight: 600 })
+    const shot = await seedShot(vp.id)
+    await deleteShot(shot.id)
+
+    await updateShotTransform(shot.id, { scale: 2, rotation: 0, tx: 0, ty: 0 })
+
+    expect(await getShot(shot.id)).toBeUndefined()
   })
 
   it('supprime une photo sans toucher au point de vue', async () => {
