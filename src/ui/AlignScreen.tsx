@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { createGestureState, gestureReducer, type GestureEvent } from '@/align/gesture'
-import { toFrameCoords } from '@/align/surface'
 import { IDENTITY, clampToCover } from '@/align/transform'
 import { peekPendingShot, takePendingShot } from '@/capture/pendingShot'
 import { addShot } from '@/db/shots'
@@ -9,9 +7,8 @@ import { isQuotaError } from '@/db/storage'
 import { useBitmap } from '@/hooks/useBitmap'
 import { useShots } from '@/hooks/useShots'
 import type { Size, Transform } from '@/types'
+import { AlignSurface } from './components/AlignSurface'
 import { BusyStatus } from './components/BusyStatus'
-import { OpacitySlider } from './components/OpacitySlider'
-import { ShotCanvas } from './components/ShotCanvas'
 import { Screen } from './components/Screen'
 
 /** Étapes visibles de la validation : l encodage peut ne pas être fini à la tape. */
@@ -58,29 +55,10 @@ export function AlignScreen() {
   const [transform, setTransform] = useState<Transform>(initial)
   useEffect(() => setTransform(initial), [initial])
 
-  const [opacity, setOpacity] = useState(0.5)
-  const [swapped, setSwapped] = useState(false)
   const [stage, setStage] = useState<SaveStage>('idle')
   const [error, setError] = useState<string | null>(null)
 
-  const surfaceRef = useRef<HTMLDivElement | null>(null)
   const writingRef = useRef(false)
-  const gestureRef = useRef(createGestureState(initial, shotSize, frame))
-  useEffect(() => {
-    gestureRef.current = createGestureState(initial, shotSize, frame)
-  }, [initial, shotSize, frame])
-
-  /** Convertit un pointeur en pixels du cadre canonique, ce qu attend le réducteur. */
-  function pointerToFrame(event: React.PointerEvent) {
-    const rect = surfaceRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return toFrameCoords({ x: event.clientX, y: event.clientY }, rect, frame)
-  }
-
-  function dispatch(event: GestureEvent) {
-    gestureRef.current = gestureReducer(gestureRef.current, event)
-    setTransform(gestureRef.current.transform)
-  }
 
   async function onConfirm() {
     // Garde synchrone : le remplacement du bouton par le libellé d étape ne prend effet
@@ -137,79 +115,31 @@ export function AlignScreen() {
 
   if (!pending) return null
 
-  const layers = [
-    {
-      key: 'reference',
-      source: referenceBitmap,
-      transform: reference?.transform ?? IDENTITY,
-      shot: {
-        width: reference?.width ?? frame.width,
-        height: reference?.height ?? frame.height,
-      },
-    },
-    { key: 'captured', source: capturedSource, transform, shot: shotSize },
-  ]
-  const ordered = swapped ? [...layers].reverse() : layers
-
   return (
     <Screen title="Caler la photo">
       <div className="flex h-full flex-col gap-3 p-3">
-        <div
-          ref={surfaceRef}
-          data-testid="align-surface"
-          className="relative min-h-0 flex-1 touch-none overflow-hidden rounded-xl bg-black"
-          style={{ aspectRatio: `${frame.width} / ${frame.height}` }}
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId)
-            const { x, y } = pointerToFrame(event)
-            dispatch({ type: 'down', id: event.pointerId, x, y })
-          }}
-          onPointerMove={(event) => {
-            const { x, y } = pointerToFrame(event)
-            dispatch({ type: 'move', id: event.pointerId, x, y })
-          }}
-          onPointerUp={(event) => dispatch({ type: 'up', id: event.pointerId })}
-          onPointerCancel={(event) => dispatch({ type: 'up', id: event.pointerId })}
-        >
-          {ordered.map((layer, index) => (
-            <ShotCanvas
-              key={layer.key}
-              source={layer.source}
-              transform={layer.transform}
-              frame={frame}
-              shot={layer.shot}
-              className="pointer-events-none absolute inset-0 h-full w-full"
-              style={{ opacity: index === 0 ? 1 : opacity }}
-            />
-          ))}
-        </div>
-
-        <OpacitySlider value={opacity} onChange={setOpacity} label="Opacité du calque du dessus" />
-
-        {/* Retirés pendant l enregistrement, et pas seulement grisés : « Reprendre »
-            consomme la photo en attente, or l attente de l encodage allonge la fenêtre
-            pendant laquelle une tape la ferait disparaître sous l écriture en cours. */}
-        {stage === 'idle' && (
-          <div className="flex gap-2 text-sm">
-            <button
-              type="button"
-              data-testid="swap-layers"
-              onClick={() => setSwapped((value) => !value)}
-              className="flex-1 rounded-xl border border-slate-600 py-3"
-            >
-              Permuter
-            </button>
-            <button
-              type="button"
-              data-testid="align-reset"
-              onClick={() => {
-                gestureRef.current = createGestureState(initial, shotSize, frame)
-                setTransform(initial)
-              }}
-              className="flex-1 rounded-xl border border-slate-600 py-3"
-            >
-              Remettre à zéro
-            </button>
+        <AlignSurface
+          source={capturedSource}
+          shot={shotSize}
+          frame={frame}
+          ghost={
+            reference
+              ? {
+                  source: referenceBitmap,
+                  transform: reference.transform,
+                  shot: { width: reference.width, height: reference.height },
+                }
+              : null
+          }
+          initial={initial}
+          value={transform}
+          onChange={setTransform}
+          controls={stage === 'idle'}
+          extraControl={
+            // Retiré pendant l enregistrement, et pas seulement grisé : « Reprendre »
+            // consomme la photo en attente, or l attente de l encodage allonge la
+            // fenêtre pendant laquelle une tape la ferait disparaître sous l écriture
+            // en cours.
             <button
               type="button"
               data-testid="align-retake"
@@ -221,8 +151,8 @@ export function AlignScreen() {
             >
               Reprendre
             </button>
-          </div>
-        )}
+          }
+        />
 
         {stage === 'idle' ? (
           <button
